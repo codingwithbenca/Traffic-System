@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,6 +10,10 @@ import {
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 
 export default function PaymentsScreen() {
+  const handlePaymentPress = (title: string) => {
+    Alert.alert(title, `You selected ${title}.`);
+  };
+
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       
@@ -23,36 +28,36 @@ export default function PaymentsScreen() {
       {/* FINES */}
       <Section title="Fines & Penalties">
 
-        <PaymentItem icon="speed" title="Speed Camera Tickets" />
-        <PaymentItem icon="warning" title="Outstanding Penalties" />
-        <PaymentItem icon="receipt-long" title="Fines Overview" />
+        <PaymentItem icon="speed" title="Speed Camera Tickets" onPress={handlePaymentPress} />
+        <PaymentItem icon="warning" title="Outstanding Penalties" onPress={handlePaymentPress} />
+        <PaymentItem icon="receipt-long" title="Fines Overview" onPress={handlePaymentPress} />
 
       </Section>
 
       {/* VEHICLE PAYMENTS */}
       <Section title="Vehicle Payments">
 
-        <PaymentItem icon="directions-car" title="Vehicle Payments" />
-        <PaymentItem icon="credit-card" title="Vehicle Registration Fees" />
-        <PaymentItem icon="confirmation-number" title="License Disk Payments" />
+        <PaymentItem icon="directions-car" title="Vehicle Payments" onPress={handlePaymentPress} />
+        <PaymentItem icon="credit-card" title="Vehicle Registration Fees" onPress={handlePaymentPress} />
+        <PaymentItem icon="confirmation-number" title="License Disk Payments" onPress={handlePaymentPress} />
 
       </Section>
 
       {/* PAYMENT METHODS */}
       <Section title="Payment Methods">
 
-        <PaymentItem icon="credit-card" title="Card Payments" />
-        <PaymentItem icon="account-balance" title="Instant EFT" />
-        <PaymentItem icon="smartphone" title="Mobile Payments" />
+        <PaymentItem icon="credit-card" title="Card Payments" onPress={handlePaymentPress} />
+        <PaymentItem icon="account-balance" title="Instant EFT" onPress={handlePaymentPress} />
+        <PaymentItem icon="smartphone" title="Mobile Payments" onPress={handlePaymentPress} />
 
       </Section>
 
       {/* HISTORY */}
       <Section title="Payment History">
 
-        <PaymentItem icon="history" title="Payment History" />
-        <PaymentItem icon="download" title="Download Receipts" />
-        <PaymentItem icon="email" title="Email Receipts" />
+        <PaymentItem icon="history" title="Payment History" onPress={handlePaymentPress} />
+        <PaymentItem icon="download" title="Download Receipts" onPress={handlePaymentPress} />
+        <PaymentItem icon="email" title="Email Receipts" onPress={handlePaymentPress} />
 
       </Section>
 
@@ -74,12 +79,14 @@ function Section({ title, children }: any) {
 function PaymentItem({
   icon,
   title,
+  onPress,
 }: {
   icon: keyof typeof MaterialIcons.glyphMap;
   title: string;
+  onPress: (title: string) => void;
 }) {
   return (
-    <TouchableOpacity style={styles.item}>
+    <TouchableOpacity style={styles.item} onPress={() => onPress(title)}>
       <MaterialIcons name={icon} size={24} color="#003366" />
 
       <Text style={styles.itemText}>{title}</Text>
