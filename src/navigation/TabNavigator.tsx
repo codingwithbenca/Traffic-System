@@ -23,7 +23,7 @@ export default function TabNavigator() {
 
         tabBarLabelStyle: {
           fontSize: 11,
-          marginBottom: 5,
+          marginBottom: 0,
           fontWeight: "600",
         },
 
@@ -32,9 +32,11 @@ export default function TabNavigator() {
           bottom: 20,
           left: 20,
           right: 20,
-          height: 75,
+          height: 82,
           borderRadius: 25,
           backgroundColor: "#fff",
+          paddingTop: 6,
+          paddingBottom: 8,
           elevation: 10,
           shadowColor: "#000",
           shadowOpacity: 0.08,
@@ -137,7 +139,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#3F51B5",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 30,
+    marginBottom: 20,
 
     shadowColor: "#3F51B5",
     shadowOpacity: 0.3,
