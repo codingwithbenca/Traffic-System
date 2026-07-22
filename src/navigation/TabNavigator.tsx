@@ -32,10 +32,10 @@ export default function TabNavigator() {
           bottom: 20,
           left: 20,
           right: 20,
-          height: 82,
+          height: 82, //increased height to accommodate the larger center button
           borderRadius: 25,
           backgroundColor: "#fff",
-          paddingTop: 6,
+          paddingTop: 6,//added paddingTop to make the icons vertically centered
           paddingBottom: 8,
           elevation: 10,
           shadowColor: "#000",
