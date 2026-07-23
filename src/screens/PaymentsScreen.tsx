@@ -7,11 +7,14 @@ import {
   View,
 } from "react-native";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 
 export default function PaymentsScreen() {
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
       {/* HEADER */}
       <View style={styles.header}>
         <Text style={styles.title}>Payments</Text>
@@ -22,46 +25,100 @@ export default function PaymentsScreen() {
 
       {/* FINES */}
       <Section title="Fines & Penalties">
+        <PaymentItem
+          icon="speed"
+          title="Speed Camera Tickets"
+          screen="SpeedCameraTickets"
+        />
 
-        <PaymentItem icon="speed" title="Speed Camera Tickets" />
-        <PaymentItem icon="warning" title="Outstanding Penalties" />
-        <PaymentItem icon="receipt-long" title="Fines Overview" />
+        <PaymentItem
+          icon="warning"
+          title="Outstanding Penalties"
+          screen="OutstandingPenalties"
+        />
 
+        <PaymentItem
+          icon="receipt-long"
+          title="Fines Overview"
+          screen="FinesOverview"
+        />
       </Section>
 
       {/* VEHICLE PAYMENTS */}
       <Section title="Vehicle Payments">
+        <PaymentItem
+          icon="directions-car"
+          title="Vehicle Payments"
+          screen="VehiclePayments"
+        />
 
-        <PaymentItem icon="directions-car" title="Vehicle Payments" />
-        <PaymentItem icon="credit-card" title="Vehicle Registration Fees" />
-        <PaymentItem icon="confirmation-number" title="License Disk Payments" />
+        <PaymentItem
+          icon="credit-card"
+          title="Vehicle Registration Fees"
+          screen="VehicleRegistrationFees"
+        />
 
+        <PaymentItem
+          icon="confirmation-number"
+          title="License Disk Payments"
+          screen="LicenseDiskPayments"
+        />
       </Section>
 
       {/* PAYMENT METHODS */}
       <Section title="Payment Methods">
+        <PaymentItem
+          icon="credit-card"
+          title="Card Payments"
+          screen="CardPayments"
+        />
 
-        <PaymentItem icon="credit-card" title="Card Payments" />
-        <PaymentItem icon="account-balance" title="Instant EFT" />
-        <PaymentItem icon="smartphone" title="Mobile Payments" />
+        <PaymentItem
+          icon="account-balance"
+          title="Instant EFT"
+          screen="InstantEFT"
+        />
 
+        <PaymentItem
+          icon="smartphone"
+          title="Mobile Payments"
+          screen="MobilePayments"
+        />
       </Section>
 
       {/* HISTORY */}
       <Section title="Payment History">
+        <PaymentItem
+          icon="history"
+          title="Payment History"
+          screen="PaymentHistory"
+        />
 
-        <PaymentItem icon="history" title="Payment History" />
-        <PaymentItem icon="download" title="Download Receipts" />
-        <PaymentItem icon="email" title="Email Receipts" />
+        <PaymentItem
+          icon="download"
+          title="Download Receipts"
+          screen="DownloadReceipts"
+        />
 
+        <PaymentItem
+          icon="email"
+          title="Email Receipts"
+          screen="EmailReceipts"
+        />
       </Section>
-
     </ScrollView>
   );
 }
 
 /* ================= SECTION ================= */
-function Section({ title, children }: any) {
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -71,25 +128,44 @@ function Section({ title, children }: any) {
 }
 
 /* ================= PAYMENT ITEM ================= */
+
 function PaymentItem({
   icon,
   title,
+  screen,
 }: {
   icon: keyof typeof MaterialIcons.glyphMap;
   title: string;
+  screen: string;
 }) {
+  const navigation = useNavigation<any>();
+
   return (
-    <TouchableOpacity style={styles.item}>
-      <MaterialIcons name={icon} size={24} color="#003366" />
+    <TouchableOpacity
+      style={styles.item}
+      onPress={() => navigation.navigate(screen)}
+    >
+      <MaterialIcons
+        name={icon}
+        size={24}
+        color="#003366"
+      />
 
-      <Text style={styles.itemText}>{title}</Text>
+      <Text style={styles.itemText}>
+        {title}
+      </Text>
 
-      <Ionicons name="chevron-forward" size={18} color="#999" />
+      <Ionicons
+        name="chevron-forward"
+        size={18}
+        color="#999"
+      />
     </TouchableOpacity>
   );
 }
 
 /* ================= STYLES ================= */
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,

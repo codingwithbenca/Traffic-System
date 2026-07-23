@@ -111,7 +111,7 @@ To create a secure, user-friendly mobile platform that digitizes South African t
 
 
 Recommended Bottom Navigation
-🏠 1. Home
+1. Home
 
 This is the dashboard.
 
@@ -132,7 +132,7 @@ Renew License Disk
 Book Appointment
 View Digital License
 Report Issue
-🚗 2. My Licenses
+2. My Licenses
 
 Everything related to licenses.
 
@@ -155,7 +155,7 @@ Collection Location
 Renewal Section
 Renew Driver's License
 Renew Vehicle License
-📅 3. Services
+ 3. Services
 
 All traffic department services.
 
@@ -177,7 +177,7 @@ Applications
 New License Application
 Vehicle Registration
 Ownership Transfer
-💳 4. Payments
+4. Payments
 
 Everything money-related.
 
@@ -195,7 +195,7 @@ Mobile Payments
 Receipts
 Download Receipt
 Email Receipt
-📰 5. Traffic & News
+5. Traffic & News
 
 Real-time traffic information.
 
@@ -238,16 +238,16 @@ Logout
 User Flow
 BOTTOM TABS
 
-🏠 Home
-🚗 My Licenses
-📅 Services
-💳 Payments
-📰 Traffic & News
+Home
+My Licenses
+ Services
+Payments
+Traffic & News
 
 
 TOP RIGHT
 
-👤 Profile
+Profile
 
 Recommended Firestore Structure
 1. users

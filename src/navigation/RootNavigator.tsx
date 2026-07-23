@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 
 import AuthNavigator from "./AuthNavigator";
-import TabNavigator from "./TabNavigator";
+import MainNavigator from "./MainNavigator";
 
 export default function RootNavigator() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -10,7 +10,7 @@ export default function RootNavigator() {
   return (
     <NavigationContainer>
       {isLoggedIn ? (
-        <TabNavigator />
+        <MainNavigator />
       ) : (
         <AuthNavigator setIsLoggedIn={setIsLoggedIn} />
       )}

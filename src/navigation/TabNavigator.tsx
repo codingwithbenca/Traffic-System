@@ -2,6 +2,7 @@ import React from "react";
 import { View, StyleSheet } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import HomeScreen from "../screens/HomeScreen";
 import LicensesScreen from "../screens/LicensesScreen";
@@ -12,115 +13,127 @@ import NewsScreen from "../screens/NewsScreen";
 const Tab = createBottomTabNavigator();
 
 export default function TabNavigator() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: true,
-
         tabBarActiveTintColor: "#3F51B5",
-        tabBarInactiveTintColor: "#999",
+        tabBarInactiveTintColor: "#8E8E93",
+        tabBarHideOnKeyboard: true,
 
         tabBarLabelStyle: {
-          fontSize: 11,
-          marginBottom: 5,
+          fontSize: 12,
           fontWeight: "600",
+          marginBottom: 4,
         },
 
         tabBarStyle: {
-          position: "absolute",
-          bottom: 20,
-          left: 20,
-          right: 20,
-          height: 75,
-          borderRadius: 25,
-          backgroundColor: "#fff",
-          elevation: 10,
-          shadowColor: "#000",
-          shadowOpacity: 0.08,
-          shadowRadius: 10,
-          borderTopWidth: 0,
+          backgroundColor: "#FFFFFF",
+
+          // Respect Android navigation bar
+          height: 65 + insets.bottom,
+          paddingBottom: insets.bottom,
+          paddingTop: 8,
+
+          borderTopWidth: 1,
+          borderTopColor: "#ECECEC",
+
+          elevation: 8,
+          shadowOpacity: 0,
+        },
+
+        tabBarItemStyle: {
+          paddingVertical: 4,
         },
       }}
     >
-      {/* HOME */}
+      {/* Home */}
       <Tab.Screen
         name="Home"
         component={HomeScreen}
         options={{
           tabBarLabel: "Home",
-          tabBarIcon: ({ focused }) => (
+          tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="home"
-              size={24}
-              color={focused ? "#3F51B5" : "#999"}
+              color={color}
+              size={size}
             />
           ),
         }}
       />
 
-      {/* LICENSES */}
+      {/* Licenses */}
       <Tab.Screen
         name="Licenses"
         component={LicensesScreen}
         options={{
           tabBarLabel: "Licenses",
-          tabBarIcon: ({ focused }) => (
+          tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="card"
-              size={24}
-              color={focused ? "#3F51B5" : "#999"}
+              color={color}
+              size={size}
             />
           ),
         }}
       />
 
-      {/* SERVICES */}
+      {/* Services */}
       <Tab.Screen
         name="Services"
         component={ServicesScreen}
         options={{
           tabBarLabel: "Services",
-
-          tabBarIcon: () => (
-            <View style={styles.centerButton}>
+          tabBarIcon: ({ focused }) => (
+            <View
+              style={[
+                styles.servicesButton,
+                {
+                  backgroundColor: focused ? "#3F51B5" : "#5C6BC0",
+                },
+              ]}
+            >
               <Ionicons
                 name="apps"
                 size={30}
-                color="#fff"
+                color="#FFFFFF"
               />
             </View>
           ),
         }}
       />
 
-      {/* PAYMENTS */}
+      {/* Payments */}
       <Tab.Screen
         name="Payments"
         component={PaymentsScreen}
         options={{
           tabBarLabel: "Payments",
-          tabBarIcon: ({ focused }) => (
+          tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="wallet"
-              size={24}
-              color={focused ? "#3F51B5" : "#999"}
+              color={color}
+              size={size}
             />
           ),
         }}
       />
 
-      {/* UPDATES */}
+      {/* Updates */}
       <Tab.Screen
         name="Updates"
         component={NewsScreen}
         options={{
           tabBarLabel: "Updates",
-          tabBarIcon: ({ focused }) => (
+          tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="newspaper"
-              size={24}
-              color={focused ? "#3F51B5" : "#999"}
+              color={color}
+              size={size}
             />
           ),
         }}
@@ -130,18 +143,25 @@ export default function TabNavigator() {
 }
 
 const styles = StyleSheet.create({
-  centerButton: {
-    width: 65,
-    height: 65,
-    borderRadius: 32.5,
-    backgroundColor: "#3F51B5",
+  servicesButton: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 30,
+
+    marginTop: -50,
+
+    backgroundColor: "#3F51B5",
 
     shadowColor: "#3F51B5",
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.25,
     shadowRadius: 8,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
     elevation: 8,
   },
 });

@@ -7,11 +7,14 @@ import {
   View,
 } from "react-native";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 
 export default function MyLicensesScreen() {
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
       {/* HEADER */}
       <View style={styles.header}>
         <Text style={styles.title}>My Licenses</Text>
@@ -22,52 +25,121 @@ export default function MyLicensesScreen() {
 
       {/* DRIVER LICENSE */}
       <Section title="Driver's License">
+        <Card
+          label="License Number"
+          value="DL-784-992-PTA"
+        />
 
-        <Card label="License Number" value="DL-784-992-PTA" />
-        <Card label="Expiry Date" value="12 Mar 2030" />
-        <Card label="Status" value="Valid" status="good" />
+        <Card
+          label="Expiry Date"
+          value="12 Mar 2030"
+        />
 
-        <ActionButton title="Digital Driver's License" icon="card" />
-        <ActionButton title="QR Code" icon="qr-code" />
-        <ActionButton title="NFC Verification" icon="radio" />
+        <Card
+          label="Status"
+          value="Valid"
+          status="good"
+        />
 
-        <ActionButton title="Renew Driver's License" icon="refresh" />
+        <ActionButton
+          title="Digital Driver's License"
+          icon="card"
+          screen="DigitalLicense"
+        />
+
+        <ActionButton
+          title="QR Code"
+          icon="qr-code"
+          screen="QRCode"
+        />
+
+        <ActionButton
+          title="NFC Verification"
+          icon="radio"
+          screen="NFCVerification"
+        />
+
+        <ActionButton
+          title="Renew Driver's License"
+          icon="refresh"
+          screen="RenewDriverLicense"
+        />
       </Section>
 
-      {/* VEHICLE LICENSES */}
+      {/* VEHICLE LICENSE */}
       <Section title="Vehicle Licenses">
+        <Card
+          label="Vehicle List"
+          value="2 Vehicles Registered"
+        />
 
-        <Card label="Vehicle List" value="2 Vehicles Registered" />
-        <Card label="License Disk Expiry" value="Expires in 30 days" />
-        <Card label="Ownership" value="Verified Owner" status="good" />
+        <Card
+          label="License Disk Expiry"
+          value="Expires in 30 days"
+        />
 
-        <ActionButton title="View Vehicle Information" icon="car" />
-        <ActionButton title="Renew Vehicle License" icon="refresh" />
+        <Card
+          label="Ownership"
+          value="Verified Owner"
+          status="good"
+        />
+
+        <ActionButton
+          title="View Vehicle Information"
+          icon="car"
+          screen="VehicleInformation"
+        />
+
+        <ActionButton
+          title="Renew Vehicle License"
+          icon="refresh"
+          screen="RenewVehicleLicense"
+        />
       </Section>
 
       {/* COLLECTION STATUS */}
       <Section title="Collection Status">
+        <StatusItem
+          title="Card Production Status"
+          value="In Production"
+        />
 
-        <StatusItem title="Card Production Status" value="In Production" />
-        <StatusItem title="Ready for Collection" value="Not Ready" />
-        <StatusItem title="Collection Location" value="Pretoria DLTC" />
+        <StatusItem
+          title="Ready for Collection"
+          value="Not Ready"
+        />
+
+        <StatusItem
+          title="Collection Location"
+          value="Pretoria DLTC"
+        />
       </Section>
-
     </ScrollView>
   );
 }
 
-/* ================= SECTION WRAPPER ================= */
-function Section({ title, children }: any) {
+/* ================= SECTION ================= */
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+      <Text style={styles.sectionTitle}>
+        {title}
+      </Text>
+
       {children}
     </View>
   );
 }
 
-/* ================= SIMPLE INFO CARD ================= */
+/* ================= CARD ================= */
+
 function Card({
   label,
   value,
@@ -79,7 +151,10 @@ function Card({
 }) {
   return (
     <View style={styles.card}>
-      <Text style={styles.cardLabel}>{label}</Text>
+      <Text style={styles.cardLabel}>
+        {label}
+      </Text>
+
       <Text
         style={[
           styles.cardValue,
@@ -95,23 +170,44 @@ function Card({
 }
 
 /* ================= ACTION BUTTON ================= */
+
 function ActionButton({
   title,
   icon,
+  screen,
 }: {
   title: string;
   icon: keyof typeof MaterialIcons.glyphMap;
+  screen: string;
 }) {
+  const navigation = useNavigation<any>();
+
   return (
-    <TouchableOpacity style={styles.action}>
-      <MaterialIcons name={icon} size={24} color="#003366" />
-      <Text style={styles.actionText}>{title}</Text>
-      <Ionicons name="chevron-forward" size={18} color="#999" />
+    <TouchableOpacity
+      style={styles.action}
+      onPress={() => navigation.navigate(screen)}
+    >
+      <MaterialIcons
+        name={icon}
+        size={24}
+        color="#003366"
+      />
+
+      <Text style={styles.actionText}>
+        {title}
+      </Text>
+
+      <Ionicons
+        name="chevron-forward"
+        size={18}
+        color="#999"
+      />
     </TouchableOpacity>
   );
 }
 
-/* ================= STATUS ITEM ================= */
+/* ================= STATUS ================= */
+
 function StatusItem({
   title,
   value,
@@ -121,13 +217,19 @@ function StatusItem({
 }) {
   return (
     <View style={styles.statusItem}>
-      <Text style={styles.statusTitle}>{title}</Text>
-      <Text style={styles.statusValue}>{value}</Text>
+      <Text style={styles.statusTitle}>
+        {title}
+      </Text>
+
+      <Text style={styles.statusValue}>
+        {value}
+      </Text>
     </View>
   );
 }
 
 /* ================= STYLES ================= */
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -186,13 +288,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     marginBottom: 10,
   },
 
   actionText: {
     flex: 1,
-    marginLeft: 10,
+    marginLeft: 12,
     fontWeight: "600",
     color: "#222",
   },
@@ -210,9 +311,9 @@ const styles = StyleSheet.create({
   },
 
   statusValue: {
-    fontSize: 15,
+    marginTop: 4,
     fontWeight: "700",
     color: "#003366",
-    marginTop: 4,
+    fontSize: 15,
   },
 });

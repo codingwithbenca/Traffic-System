@@ -13,8 +13,8 @@ import {
   Button
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
-
+import { useNavigation } from "@react-navigation/native";
+import DriverLicenseCard from "../components/DriverLicenseCard";
 /* TYPES */
 type SectionHeaderProps = {
   title: string;
@@ -22,9 +22,12 @@ type SectionHeaderProps = {
 };
 
 type StatusCardProps = {
-  icon: ReactNode;
+  icon: React.ReactNode;
   title: string;
   subtitle: string;
+  status?: string;
+  statusColor?: string;
+  hideChevron?: boolean;
   onPress?: () => void;
 };
 
@@ -35,6 +38,7 @@ type QuickActionProps = {
 };
 
 export default function HomeScreen() {
+  const navigation = useNavigation<any>();
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.wrapper}>
@@ -52,38 +56,35 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.headerIcons}>
-              <TouchableOpacity style={styles.iconButton}>
-                <Ionicons
-                  name="notifications-outline"
-                  size={24}
-                  color="#003366"
-                />
-              </TouchableOpacity>
+              <TouchableOpacity
+  style={styles.iconButton}
+  onPress={() => navigation.navigate("Notifications")}
+>
+  <Ionicons
+    name="notifications-outline"
+    size={24}
+    color="#003366"
+  />
+</TouchableOpacity>
 
-              <TouchableOpacity style={styles.iconButton}>
-                <Ionicons
-                  name="person-circle-outline"
-                  size={30}
-                  color="#003366"
-                />
-              </TouchableOpacity>
+<TouchableOpacity
+  style={styles.iconButton}
+ onPress={() => navigation.navigate("Profile")}
+>
+  <Ionicons
+    name="person-circle-outline"
+    size={30}
+    color="#003366"
+  />
+</TouchableOpacity>
+
+             
             </View>
           </View>
 
           {/* STATUS CARDS */}
-          <StatusCard
-            icon={<MaterialIcons name="badge" size={26} color="#003366" />}
-            title="Driver License"
-            subtitle="Valid • Expires 12 Mar 2030"
-            onPress={() => router.push("/driver-license")}
-          />
-<Button
-  title="Test Driver License"
-  onPress={() => {
-    console.log("clicked");
-    router.push("/driver-license");
-  }}
-/>
+          <DriverLicenseCard />
+
           <StatusCard
             icon={
               <MaterialCommunityIcons
@@ -94,30 +95,38 @@ export default function HomeScreen() {
             }
             title="Vehicle License"
             subtitle="Expires in 30 days"
-            onPress={() => router.push("/vehicle-license")}
+           onPress={() => navigation.navigate("VehicleLicense")}
           />
 
-          <StatusCard
-            icon={
-              <MaterialIcons
-                name="warning-amber"
-                size={26}
-                color="#E65100"
-              />
-            }
-            title="Outstanding Fines"
-            subtitle="2 unpaid fines • R750"
-            onPress={() => router.push("/fines")}
-          />
-
-          <StatusCard
-            icon={
-              <Ionicons name="calendar-outline" size={24} color="#003366" />
-            }
-            title="Upcoming Appointment"
-            subtitle="15 July 2026 • Pretoria DLTC"
-            onPress={() => router.push("/appointments")}
-          />
+         <StatusCard
+  icon={
+    <MaterialIcons
+      name="warning-amber"
+      size={26}
+      color="#E65100"
+    />
+  }
+  title="Traffic Fines"
+  subtitle="Outstanding Balance: R750 • 2 Unpaid"
+  onPress={() => navigation.navigate("Fines")}
+/>
+ <StatusCard
+  icon={
+    <Ionicons
+      name="calendar-outline"
+      size={24}
+      color="#003366"
+    />
+  }
+  title="Next Appointment"
+  subtitle={`Driver Licence Renewal
+15 Jul 2026 • 09:30 AM
+📍 Pretoria DLTC`}
+  status="Confirmed"
+  statusColor="#2E7D32"
+  hideChevron
+  onPress={() => navigation.navigate("Appointments")}
+/>
 
           {/* QUICK ACTIONS */}
           <SectionHeader title="Quick Actions" />
@@ -198,14 +207,10 @@ export default function HomeScreen() {
 
 /* COMPONENTS */
 
-function SectionHeader({ title, onPress }: SectionHeaderProps) {
+function SectionHeader({ title }: SectionHeaderProps) {
   return (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
-
-      <TouchableOpacity onPress={onPress}>
-        <Ionicons name="chevron-forward" size={20} color="#666" />
-      </TouchableOpacity>
     </View>
   );
 }

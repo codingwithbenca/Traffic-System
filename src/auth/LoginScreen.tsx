@@ -9,6 +9,9 @@ import {
 
 import { verifyLogin } from "../services/authService";
 import { getDeviceInfo } from "../utils/device";
+import SeedCitizensButton from "../components/SeedCitizensButton";
+
+
 
 export default function LoginScreen({
   navigation,
@@ -48,6 +51,7 @@ export default function LoginScreen({
   };
 
   return (
+     
     <View
       style={{
         flex: 1,
@@ -98,6 +102,8 @@ export default function LoginScreen({
           opacity: loading ? 0.7 : 1,
         }}
       >
+  
+
         {loading ? (
           <ActivityIndicator color="#fff" />
         ) : (
