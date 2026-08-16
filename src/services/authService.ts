@@ -132,6 +132,7 @@ export async function verifyLogin(idNumber: string, device: any) {
     return {
       success: true,
       message: "Login successful",
+        userId: idNumber,
     };
   } catch (error) {
     console.log("login error:", error);

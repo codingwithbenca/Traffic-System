@@ -1,8 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
-
-// Firebase config
+import { getStorage } from "firebase/storage";
+//Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyCcj7eBah4tE30icEb3lXgLOCHK6LAvqg8",
   authDomain: "schoolprojcet.firebaseapp.com",
@@ -13,11 +13,12 @@ const firebaseConfig = {
   measurementId: "G-RYSBWN8EGJ",
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
 
+
+//Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const storage = getStorage(app);
 // Firestore DB (THIS is what your authService uses)
 export const db = getFirestore(app);
 
 // Analytics (only works on web, optional)
-const analytics = getAnalytics(app);

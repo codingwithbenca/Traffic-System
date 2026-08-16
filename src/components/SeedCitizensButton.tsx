@@ -1,129 +1,45 @@
-import React, { useState } from "react";
-import {
-  TouchableOpacity,
-  Text,
-  Alert,
-  ActivityIndicator,
-} from "react-native";
-
+import { collection, doc, getDocs, updateDoc } from "firebase/firestore";
 import { db } from "../services/firebase";
-import { doc, setDoc } from "firebase/firestore";
+import { Alert } from "react-native";
 
-const citizens = [
-  {
-    id: "1000000000001",
-    fullName: "Malusi",
-    phone: "07729077759",
-  },
-  {
-    id: "1000000000002",
-    fullName: "Mabusa",
-    phone: "07682096402",
-  },
-  {
-    id: "1000000000003",
-    fullName: "Orebetse",
-    phone: "07797057222",
-  },
-  {
-    id: "1000000000004",
-    fullName: "Kamohelo",
-    phone: "07827497455",
-  },
-  {
-    id: "1000000000005",
-    fullName: "Kagoentle",
-    phone: "07677747261",
-  },
-  {
-    id: "1000000000006",
-    fullName: "De Nas",
-    phone: "07610630843",
-  },
-  {
-    id: "1000000000007",
-    fullName: "Child",
-    phone: "07647331671",
-  },
-  {
-    id: "1000000000008",
-    fullName: "Your Name",
-    phone: "068990890909", // Replace with your number
-  },
-];
+export async function seedCitizenData() {
+  try {
+    const snapshot = await getDocs(collection(db, "citizens"));
 
-export default function SeedCitizensButton() {
-  const [loading, setLoading] = useState(false);
+    for (const citizen of snapshot.docs) {
+      await updateDoc(doc(db, "citizens", citizen.id), {
+        driverLicense: {
+          number: `DL-${citizen.id.slice(-6)}`,
+          status: "Valid",
+          expiryDate: "2030-03-12",
+          issueDate: "2025-03-12",
+          class: "B",
+          cardNumber: `CARD-${citizen.id}`,
+        },
 
-  const injectCitizens = async () => {
-    try {
-      setLoading(true);
+        digitalLicense: {
+          enabled: true,
+          qrToken: `QR-${citizen.id}`,
+          lastGenerated: new Date().toISOString(),
+        },
 
-      for (const citizen of citizens) {
-        await setDoc(doc(db, "citizens", citizen.id), {
-          idNumber: citizen.id,
-          fullName: citizen.fullName,
-          phone: citizen.phone,
+        collection: {
+          productionStatus: "Ready",
+          readyForCollection: true,
+          location: "Pretoria DLTC",
+        },
 
-          verified: false,
+        ownership: {
+          verified: true,
+        },
+      });
 
-          devices: {},
-
-          suspiciousDevices: {},
-
-          lockNewDevices: false,
-
-          lastLoginDevice: null,
-
-          lastLoginAt: null,
-
-          biometricEnabled: false,
-
-          accountStatus: "active",
-
-          createdAt: new Date().toISOString(),
-
-          updatedAt: new Date().toISOString(),
-        });
-      }
-
-      Alert.alert(
-        "Success",
-        `${citizens.length} citizens injected successfully.`
-      );
-    } catch (e) {
-      console.log(e);
-      Alert.alert("Error", "Failed to inject citizens.");
+      console.log(`Updated ${citizen.id}`);
     }
 
-    setLoading(false);
-  };
-
-  return (
-    <TouchableOpacity
-      onPress={injectCitizens}
-      disabled={loading}
-      style={{
-        backgroundColor: "#1976D2",
-        padding: 16,
-        borderRadius: 12,
-        alignItems: "center",
-        margin: 20,
-      }}
-    >
-      {loading ? (
-        <ActivityIndicator color="#fff" />
-      ) : (
-        <Text
-          style={{
-            color: "#fff",
-            fontWeight: "700",
-            fontSize: 16,
-          }}
-        >
-          Inject Test Citizens
-        </Text>
-      )}
-    </TouchableOpacity>
-  );
+    Alert.alert("Success", "All citizens updated successfully.");
+  } catch (error) {
+    console.error(error);
+    Alert.alert("Error", "Failed to seed citizen data.");
+  }
 }
