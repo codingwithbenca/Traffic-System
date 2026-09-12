@@ -46,6 +46,7 @@ import EmailReceiptsScreen from "../screens/PAYMENTS/email-receipts";
 /* =========================================================
    SERVICES
 ========================================================= */
+
 //import AppointmentHistoryScreen from "../screens/SERVICES/AppointmentHistory";
 import AppointmentBooking from "../screens/SERVICES/AppointmentBooking";
 import MyAppointmentsScreen from "../screens/SERVICES/MyAppointments";
@@ -62,6 +63,13 @@ import UploadDocumentsScreen from "../screens/SERVICES/upload-documents";
 import ApplicationsDashboardScreen from "../screens/SERVICES/applications-dashboard";
 import EyeTestScreen from "../screens/SERVICES/eye-test";
 import VisionTestScreen from "../screens/SERVICES/VisionTestScreen";
+
+
+/* =========================================================
+   Updates
+========================================================= */
+import NavigationScreen from "../screens/Updates/NavigationScreen";
+
 /* =========================================================
    NAVIGATOR
 ========================================================= */
@@ -84,8 +92,14 @@ export default function MainNavigator() {
         name="Tabs"
         component={TabNavigator}
         options={{ headerShown: false }}
+        
       />
 
+<Stack.Screen
+  name="Navigation"
+  component={NavigationScreen}
+  
+/>
       {/* =====================================================
           HOME
       ===================================================== */}

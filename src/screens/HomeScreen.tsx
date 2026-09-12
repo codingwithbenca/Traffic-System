@@ -1,9 +1,12 @@
+
 import React, { ReactNode } from "react";
+
 import {
   Ionicons,
   MaterialCommunityIcons,
   MaterialIcons,
 } from "@expo/vector-icons";
+
 import {
   ScrollView,
   StyleSheet,
@@ -11,17 +14,32 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
-import DriverLicenseCard from "../components/DriverLicenseCard";
 
+import DriverLicenseCard from "../components/DriverLicenseCard";
+import DevSeedFines from "../components/DevSeedFines";
 import { seedCitizenIdentityData } from "../components/seedCitizenIdentityData";
 import { seedCitizenExtras } from "../components/seedCitizenExtras";
+import OutstandingAmountCard from "../components/OutstandingAmountCard";
 import NextAppointmentCard from "./HOME/NextAppointmentCard";
 
-/* =========================================================
-   COLOURS
-========================================================= */
+/*
+=========================================================
+  REAL TRAFFIC / WEATHER COMPONENTS
+=========================================================
+*/
+
+import LiveTraffic from "./Updates/LiveTraffic";
+import TrafficIncidents from "./Updates/TrafficIncidents";
+import WeatherAlerts from "./Updates/WeatherAlerts";
+
+/*
+=========================================================
+  COLOURS
+=========================================================
+*/
 
 const COLORS = {
   primary: "#0B4F8A",
@@ -45,9 +63,11 @@ const COLORS = {
   softRed: "#FEF3F2",
 };
 
-/* =========================================================
-   TYPES
-========================================================= */
+/*
+=========================================================
+  TYPES
+=========================================================
+*/
 
 type SectionHeaderProps = {
   title: string;
@@ -72,9 +92,11 @@ type QuickActionProps = {
   onPress?: () => void;
 };
 
-/* =========================================================
-   SCREEN
-========================================================= */
+/*
+=========================================================
+  SCREEN
+=========================================================
+*/
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -86,6 +108,7 @@ export default function HomeScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+
           {/* =================================================
               HEADER
           ================================================= */}
@@ -101,16 +124,16 @@ export default function HomeScreen() {
 
             <View style={styles.headerInformation}>
               <Text style={styles.eyebrow}>
-                 Department of Transport Services
-                E-TRANSPORT PORTAL
+                DEPARTMENT OF TRANSPORT SERVICES
               </Text>
 
-              
-
-              
+              <Text style={styles.title}>
+                E-TRANSPORT PORTAL
+              </Text>
             </View>
 
             <View style={styles.headerIcons}>
+
               <TouchableOpacity
                 style={styles.iconButton}
                 activeOpacity={0.8}
@@ -138,6 +161,7 @@ export default function HomeScreen() {
                   color={COLORS.primary}
                 />
               </TouchableOpacity>
+
             </View>
           </View>
 
@@ -153,53 +177,22 @@ export default function HomeScreen() {
 
           <DriverLicenseCard />
 
-          
-
-
-       <NextAppointmentCard
-  onPress={() =>
-    navigation.navigate(
-      "Appointments" as never
-    )
-  }
-/>
-
-          {/* =================================================
-              QUICK ACTIONS
-          ================================================= */}
-
-          <SectionHeader
-            title="Quick Actions"
-            description="Frequently used transport services."
-            icon="flash-outline"
+          <OutstandingAmountCard
+            citizenId="1000000000007"
+            onPress={() =>
+              navigation.navigate("OutstandingPenalties")
+            }
           />
 
-          <View style={styles.quickActionsGrid}>
-           <QuickAction
-  icon="payment"
-  title="Pay Fine"
-  onPress={() => navigation.navigate("OutstandingPenalties")}
-/>
+          <NextAppointmentCard
+            onPress={() =>
+              navigation.navigate(
+                "Appointments" as never
+              )
+            }
+          />
 
-<QuickAction
-  icon="sync"
-  title="Renew Disk"
-  onPress={() => navigation.navigate("RenewDriverLicense")}
-/>
-
-<QuickAction
-  icon="calendar-month"
-  title="Appointment"
-  onPress={() => navigation.navigate("Appointments")}
-/>
-
-<QuickAction
-  icon="badge"
-  title="Digital License"
-  onPress={() => navigation.navigate("NFCVerification")}
-/>
-          </View>
-
+         
           {/* =================================================
               TRAFFIC UPDATES
           ================================================= */}
@@ -210,67 +203,9 @@ export default function HomeScreen() {
             icon="car-outline"
           />
 
-          <TouchableOpacity
-            style={styles.mapCard}
-            activeOpacity={0.85}
-          >
-            <View style={styles.fakeMap}>
-              <View style={styles.mapRoadHorizontal} />
-              <View style={styles.mapRoadVertical} />
-
-              <View style={styles.mapRoadDiagonal} />
-
-              <View
-                style={[
-                  styles.mapMarker,
-                  styles.trafficMarker,
-                  { top: "39%", left: "52%" },
-                ]}
-              >
-                <MaterialCommunityIcons
-                  name="traffic-light"
-                  size={18}
-                  color="#FFFFFF"
-                />
-              </View>
-
-              <View style={styles.mapLabel}>
-                <Text style={styles.mapLabelTitle}>
-                  Heavy Traffic
-                </Text>
-
-                <Text style={styles.mapLabelText}>
-                  N1 North
-                </Text>
-              </View>
-
-              <View style={styles.mapBottom}>
-                <View style={styles.mapBottomIcon}>
-                  <MaterialCommunityIcons
-                    name="traffic-light"
-                    size={17}
-                    color={COLORS.warning}
-                  />
-                </View>
-
-                <View style={styles.mapBottomInformation}>
-                  <Text style={styles.mapBottomTitle}>
-                    Traffic Alert
-                  </Text>
-
-                  <Text style={styles.mapBottomDescription}>
-                    Heavy traffic reported on N1 North.
-                  </Text>
-                </View>
-
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color={COLORS.textLight}
-                />
-              </View>
-            </View>
-          </TouchableOpacity>
+          <View style={styles.componentCard}>
+            <LiveTraffic />
+          </View>
 
           {/* =================================================
               ROAD CLOSURES
@@ -282,67 +217,9 @@ export default function HomeScreen() {
             icon="warning-outline"
           />
 
-          <TouchableOpacity
-            style={styles.mapCard}
-            activeOpacity={0.85}
-          >
-            <View style={styles.fakeMap}>
-              <View style={styles.mapRoadHorizontal} />
-              <View style={styles.mapRoadVertical} />
-
-              <View style={styles.mapRoadSecondary} />
-
-              <View
-                style={[
-                  styles.mapMarker,
-                  styles.closureMarker,
-                  { top: "35%", left: "38%" },
-                ]}
-              >
-                <MaterialIcons
-                  name="warning"
-                  size={18}
-                  color="#FFFFFF"
-                />
-              </View>
-
-              <View style={styles.mapLabel}>
-                <Text style={styles.mapLabelTitle}>
-                  Road Closed
-                </Text>
-
-                <Text style={styles.mapLabelText}>
-                  Mabopane Road
-                </Text>
-              </View>
-
-              <View style={styles.mapBottom}>
-                <View style={styles.mapBottomIconWarning}>
-                  <MaterialIcons
-                    name="warning-amber"
-                    size={17}
-                    color={COLORS.warning}
-                  />
-                </View>
-
-                <View style={styles.mapBottomInformation}>
-                  <Text style={styles.mapBottomTitle}>
-                    Road Closure
-                  </Text>
-
-                  <Text style={styles.mapBottomDescription}>
-                    Mabopane Road is currently closed.
-                  </Text>
-                </View>
-
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color={COLORS.textLight}
-                />
-              </View>
-            </View>
-          </TouchableOpacity>
+          <View style={styles.componentCard}>
+            <TrafficIncidents />
+          </View>
 
           {/* =================================================
               WEATHER
@@ -354,59 +231,9 @@ export default function HomeScreen() {
             icon="partly-sunny-outline"
           />
 
-          <TouchableOpacity
-            style={styles.mapCard}
-            activeOpacity={0.85}
-          >
-            <View style={styles.fakeMap}>
-              <View style={styles.mapRoadHorizontal} />
-              <View style={styles.mapRoadVertical} />
-
-              <View style={styles.weatherCircle}>
-                <Ionicons
-                  name="partly-sunny"
-                  size={28}
-                  color={COLORS.primary}
-                />
-              </View>
-
-              <View style={styles.weatherTemperature}>
-                <Text style={styles.weatherTemperatureText}>
-                  24°
-                </Text>
-
-                <Text style={styles.weatherCondition}>
-                  Clear
-                </Text>
-              </View>
-
-              <View style={styles.mapBottom}>
-                <View style={styles.mapBottomIcon}>
-                  <Ionicons
-                    name="location-outline"
-                    size={17}
-                    color={COLORS.primary}
-                  />
-                </View>
-
-                <View style={styles.mapBottomInformation}>
-                  <Text style={styles.mapBottomTitle}>
-                    Pretoria
-                  </Text>
-
-                  <Text style={styles.mapBottomDescription}>
-                    24°C • Clear conditions
-                  </Text>
-                </View>
-
-                <Ionicons
-                  name="chevron-forward"
-                  size={18}
-                  color={COLORS.textLight}
-                />
-              </View>
-            </View>
-          </TouchableOpacity>
+          <View style={styles.componentCard}>
+            <WeatherAlerts />
+          </View>
 
           {/* =================================================
               RECENT NOTIFICATIONS
@@ -422,6 +249,7 @@ export default function HomeScreen() {
             style={styles.notificationCard}
             activeOpacity={0.8}
           >
+
             <View style={styles.notificationIcon}>
               <Ionicons
                 name="notifications-outline"
@@ -431,6 +259,7 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.notificationInformation}>
+
               <Text style={styles.notificationTitle}>
                 Driver's license ready for collection
               </Text>
@@ -439,6 +268,7 @@ export default function HomeScreen() {
                 Your physical driver's licence is ready
                 for collection.
               </Text>
+
             </View>
 
             <Ionicons
@@ -446,6 +276,7 @@ export default function HomeScreen() {
               size={18}
               color={COLORS.textLight}
             />
+
           </TouchableOpacity>
 
           {/* =================================================
@@ -453,6 +284,7 @@ export default function HomeScreen() {
           ================================================= */}
 
           <View style={styles.notice}>
+
             <Ionicons
               name="information-circle-outline"
               size={19}
@@ -464,16 +296,20 @@ export default function HomeScreen() {
               on the records and services associated with
               your citizen account.
             </Text>
+
           </View>
+
         </ScrollView>
       </View>
     </SafeAreaView>
   );
 }
 
-/* =========================================================
-   SECTION HEADER
-========================================================= */
+/*
+=========================================================
+  SECTION HEADER
+=========================================================
+*/
 
 function SectionHeader({
   title,
@@ -482,15 +318,20 @@ function SectionHeader({
 }: SectionHeaderProps) {
   return (
     <View style={styles.sectionHeader}>
+
       <View style={styles.sectionHeaderIcon}>
         <Ionicons
-          name={icon ?? "information-circle-outline"}
+          name={
+            icon ??
+            "information-circle-outline"
+          }
           size={19}
           color={COLORS.primary}
         />
       </View>
 
       <View style={styles.sectionHeaderInformation}>
+
         <Text style={styles.sectionTitle}>
           {title}
         </Text>
@@ -500,14 +341,17 @@ function SectionHeader({
             {description}
           </Text>
         )}
+
       </View>
     </View>
   );
 }
 
-/* =========================================================
-   STATUS CARD
-========================================================= */
+/*
+=========================================================
+  STATUS CARD
+=========================================================
+*/
 
 function StatusCard({
   icon,
@@ -524,10 +368,13 @@ function StatusCard({
       activeOpacity={0.8}
       onPress={onPress}
     >
+
       <View style={styles.cardRow}>
+
         {icon}
 
         <View style={styles.cardContent}>
+
           <Text style={styles.cardTitle}>
             {title}
           </Text>
@@ -535,6 +382,7 @@ function StatusCard({
           <Text style={styles.cardSubtitle}>
             {subtitle}
           </Text>
+
         </View>
 
         {status && (
@@ -551,6 +399,7 @@ function StatusCard({
               },
             ]}
           >
+
             <Text
               style={[
                 styles.statusBadgeText,
@@ -563,6 +412,7 @@ function StatusCard({
             >
               {status}
             </Text>
+
           </View>
         )}
 
@@ -574,14 +424,17 @@ function StatusCard({
             style={styles.cardChevron}
           />
         )}
+
       </View>
     </TouchableOpacity>
   );
 }
 
-/* =========================================================
-   QUICK ACTION
-========================================================= */
+/*
+=========================================================
+  QUICK ACTION
+=========================================================
+*/
 
 function QuickAction({
   icon,
@@ -594,12 +447,15 @@ function QuickAction({
       activeOpacity={0.8}
       onPress={onPress}
     >
+
       <View style={styles.quickActionIcon}>
+
         <MaterialIcons
           name={icon}
           size={25}
           color={COLORS.primary}
         />
+
       </View>
 
       <Text style={styles.quickActionTitle}>
@@ -611,21 +467,33 @@ function QuickAction({
       </Text>
 
       <View style={styles.quickActionArrow}>
+
         <Ionicons
           name="chevron-forward"
           size={16}
           color={COLORS.textLight}
         />
+
       </View>
+
     </TouchableOpacity>
   );
 }
 
-/* =========================================================
-   STYLES
-========================================================= */
+/*
+=========================================================
+  STYLES
+=========================================================
+*/
 
 const styles = StyleSheet.create({
+
+  /*
+  =======================================================
+    SAFE AREA
+  =======================================================
+  */
+
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
@@ -641,9 +509,11 @@ const styles = StyleSheet.create({
     paddingBottom: 60,
   },
 
-  /* =======================================================
-     HEADER
-  ======================================================= */
+  /*
+  =======================================================
+    HEADER
+  =======================================================
+  */
 
   header: {
     flexDirection: "row",
@@ -665,7 +535,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 5,
     marginTop: 10,
-   
   },
 
   eyebrow: {
@@ -707,9 +576,11 @@ const styles = StyleSheet.create({
     marginLeft: 7,
   },
 
-  /* =======================================================
-     SECTION
-  ======================================================= */
+  /*
+  =======================================================
+    SECTION
+  =======================================================
+  */
 
   sectionHeader: {
     flexDirection: "row",
@@ -745,9 +616,22 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  /* =======================================================
-     STATUS CARDS
-  ======================================================= */
+  /*
+  =======================================================
+    REAL COMPONENT WRAPPER
+  =======================================================
+  */
+
+  componentCard: {
+    width: "100%",
+    marginBottom: 10,
+  },
+
+  /*
+  =======================================================
+    STATUS CARDS
+  =======================================================
+  */
 
   card: {
     backgroundColor: COLORS.card,
@@ -816,9 +700,11 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  /* =======================================================
-     QUICK ACTION GRID
-  ======================================================= */
+  /*
+  =======================================================
+    QUICK ACTION GRID
+  =======================================================
+  */
 
   quickActionsGrid: {
     flexDirection: "row",
@@ -868,227 +754,11 @@ const styles = StyleSheet.create({
     top: 14,
   },
 
-  /* =======================================================
-     MAP CARDS
-  ======================================================= */
-
-  mapCard: {
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    overflow: "hidden",
-    marginBottom: 10,
-  },
-
-  fakeMap: {
-    height: 190,
-    backgroundColor: "#E8EEF2",
-    position: "relative",
-    overflow: "hidden",
-  },
-
-  mapRoadHorizontal: {
-    position: "absolute",
-    height: 22,
-    width: "115%",
-    left: "-8%",
-    top: "45%",
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: "#CDD6DC",
-    transform: [
-      {
-        rotate: "-4deg",
-      },
-    ],
-  },
-
-  mapRoadVertical: {
-    position: "absolute",
-    width: 18,
-    height: "120%",
-    left: "60%",
-    top: "-10%",
-    backgroundColor: "#FFFFFF",
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: "#CDD6DC",
-    transform: [
-      {
-        rotate: "12deg",
-      },
-    ],
-  },
-
-  mapRoadDiagonal: {
-    position: "absolute",
-    height: 12,
-    width: "90%",
-    left: "-10%",
-    top: "28%",
-    backgroundColor: "#F9FBFC",
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: "#D4DDE2",
-    transform: [
-      {
-        rotate: "22deg",
-      },
-    ],
-  },
-
-  mapRoadSecondary: {
-    position: "absolute",
-    height: 14,
-    width: "100%",
-    left: "0%",
-    top: "68%",
-    backgroundColor: "#F9FBFC",
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: "#D4DDE2",
-    transform: [
-      {
-        rotate: "-17deg",
-      },
-    ],
-  },
-
-  mapMarker: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 3,
-    borderColor: "#FFFFFF",
-    position: "absolute",
-  },
-
-  trafficMarker: {
-    backgroundColor: COLORS.warning,
-  },
-
-  closureMarker: {
-    backgroundColor: COLORS.danger,
-  },
-
-  mapLabel: {
-    position: "absolute",
-    top: 15,
-    left: 15,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-
-  mapLabelTitle: {
-    fontSize: 10,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  mapLabelText: {
-    marginTop: 2,
-    fontSize: 9,
-    color: COLORS.textLight,
-  },
-
-  mapBottom: {
-    position: "absolute",
-    left: 10,
-    right: 10,
-    bottom: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 9,
-    padding: 9,
-  },
-
-  mapBottomIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 7,
-    backgroundColor: COLORS.softBlue,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  mapBottomIconWarning: {
-    width: 32,
-    height: 32,
-    borderRadius: 7,
-    backgroundColor: COLORS.softYellow,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  mapBottomInformation: {
-    flex: 1,
-    marginLeft: 8,
-    marginRight: 5,
-  },
-
-  mapBottomTitle: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  mapBottomDescription: {
-    marginTop: 2,
-    fontSize: 9,
-    lineHeight: 13,
-    color: COLORS.textLight,
-  },
-
-  /* =======================================================
-     WEATHER
-  ======================================================= */
-
-  weatherCircle: {
-    position: "absolute",
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: COLORS.softBlue,
-    alignItems: "center",
-    justifyContent: "center",
-    top: "28%",
-    left: "28%",
-    borderWidth: 2,
-    borderColor: COLORS.card,
-  },
-
-  weatherTemperature: {
-    position: "absolute",
-    top: "30%",
-    left: "48%",
-  },
-
-  weatherTemperatureText: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: COLORS.primary,
-  },
-
-  weatherCondition: {
-    marginTop: -3,
-    fontSize: 10,
-    color: COLORS.textLight,
-  },
-
-  /* =======================================================
-     NOTIFICATIONS
-  ======================================================= */
+  /*
+  =======================================================
+    NOTIFICATIONS
+  =======================================================
+  */
 
   notificationCard: {
     flexDirection: "row",
@@ -1129,9 +799,11 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
-  /* =======================================================
-     NOTICE
-  ======================================================= */
+  /*
+  =======================================================
+    NOTICE
+  =======================================================
+  */
 
   notice: {
     flexDirection: "row",
