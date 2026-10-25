@@ -2,7 +2,6 @@
 import {
   collection,
   getDocs,
-  orderBy,
   query,
   where,
 } from "firebase/firestore";
@@ -23,15 +22,11 @@ export type ApplicationStatus =
 export interface Application {
   id: string;
   citizenId: string;
-
   type: string;
   description: string;
-
   submittedDate: string;
   reference: string;
-
   status: ApplicationStatus;
-
   createdAt?: any;
   updatedAt?: any;
 }
@@ -44,21 +39,17 @@ export const getCitizenApplications = async (
   citizenId: string
 ): Promise<Application[]> => {
   console.log(
-    "[ApplicationService] ================================="
-  );
-
-  console.log(
-    "[ApplicationService] Loading applications..."
+    "[ApplicationService] ===== START ====="
   );
 
   console.log(
     "[ApplicationService] Citizen ID:",
-    citizenId
+    JSON.stringify(citizenId)
   );
 
-  if (!citizenId) {
-    console.log(
-      "[ApplicationService] ERROR: No citizen ID provided"
+  if (!citizenId || !citizenId.trim()) {
+    console.error(
+      "[ApplicationService] Missing citizen ID."
     );
 
     return [];
@@ -70,42 +61,56 @@ export const getCitizenApplications = async (
       "applications"
     );
 
+    const applicationsQuery = query(
+      applicationsRef,
+      where("citizenId", "==", citizenId.trim())
+    );
+
     console.log(
       "[ApplicationService] Collection: applications"
     );
 
-    const q = query(
-      applicationsRef,
-      where("citizenId", "==", citizenId),
-      orderBy("createdAt", "desc")
-    );
-
     console.log(
-      "[ApplicationService] Executing Firestore query..."
+      "[ApplicationService] Searching citizenId:",
+      citizenId.trim()
     );
 
-    const snapshot = await getDocs(q);
+    const snapshot = await getDocs(
+      applicationsQuery
+    );
 
     console.log(
       "[ApplicationService] Documents found:",
       snapshot.size
     );
 
-    const applications: Application[] = snapshot.docs.map(
-      (document) => {
-        const data = document.data();
+    const applications: Application[] =
+      snapshot.docs.map((applicationDoc) => {
+        const data = applicationDoc.data();
 
         console.log(
-          "[ApplicationService] Application:",
-          document.id,
-          data
+          "[ApplicationService] Document ID:",
+          applicationDoc.id
+        );
+
+        console.log(
+          "[ApplicationService] Stored citizenId:",
+          data.citizenId
+        );
+
+        console.log(
+          "[ApplicationService] Stored fields:",
+          Object.keys(data)
         );
 
         return {
-          id: document.id,
-          citizenId: data.citizenId,
+          id: applicationDoc.id,
 
-          type: data.type ?? "Unknown Application",
+          citizenId: data.citizenId ?? "",
+
+          type:
+            data.type ??
+            "Unknown Application",
 
           description:
             data.description ??
@@ -117,7 +122,7 @@ export const getCitizenApplications = async (
 
           reference:
             data.reference ??
-            `APP-${document.id}`,
+            `APP-${applicationDoc.id}`,
 
           status:
             data.status ?? "Pending",
@@ -125,16 +130,22 @@ export const getCitizenApplications = async (
           createdAt: data.createdAt,
           updatedAt: data.updatedAt,
         };
-      }
-    );
+      });
+
+    // Sort newest first without requiring a Firestore
+    // composite index for createdAt.
+    applications.sort((a, b) => {
+      return getTimestamp(b.createdAt) -
+        getTimestamp(a.createdAt);
+    });
 
     console.log(
-      "[ApplicationService] Applications loaded successfully:",
+      "[ApplicationService] Final application count:",
       applications.length
     );
 
     console.log(
-      "[ApplicationService] ================================="
+      "[ApplicationService] ===== END ====="
     );
 
     return applications;
@@ -149,27 +160,54 @@ export const getCitizenApplications = async (
 };
 
 /* =========================================================
-   FORMAT DATE
+   DATE HELPERS
 ========================================================= */
 
-const formatDate = (timestamp: any): string => {
-  if (!timestamp) {
+const getTimestamp = (value: any): number => {
+  if (!value) {
+    return 0;
+  }
+
+  try {
+    if (typeof value.toMillis === "function") {
+      return value.toMillis();
+    }
+
+    if (typeof value.toDate === "function") {
+      return value.toDate().getTime();
+    }
+
+    const date = new Date(value);
+
+    const timestamp = date.getTime();
+
+    return Number.isNaN(timestamp) ? 0 : timestamp;
+  } catch {
+    return 0;
+  }
+};
+
+const formatDate = (value: any): string => {
+  if (!value) {
     return "Unknown date";
   }
 
   try {
-    const date =
-      timestamp?.toDate
-        ? timestamp.toDate()
-        : new Date(timestamp);
+    const timestamp = getTimestamp(value);
 
-    return date.toLocaleDateString("en-ZA", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
+    if (!timestamp) {
+      return "Unknown date";
+    }
+
+    return new Date(timestamp).toLocaleDateString(
+      "en-ZA",
+      {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }
+    );
   } catch {
     return "Unknown date";
   }
 };
-

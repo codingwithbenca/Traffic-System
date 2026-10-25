@@ -1,1097 +1,839 @@
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
+  ScrollView,
   StyleSheet,
   TouchableOpacity,
   Alert,
-  TextInput,
-  ScrollView,
   ActivityIndicator,
 } from "react-native";
-import { MaterialIcons, Ionicons } from "@expo/vector-icons";
+import { MaterialIcons } from "@expo/vector-icons";
 import { useAuth } from "../../context/AuthContext";
 import { db } from "../../services/firebase";
-import { doc, updateDoc, setDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  setDoc,
+  where,
+} from "firebase/firestore";
 
-export default function RenewDriverLicenseScreen() {
+type RenewalRequest = {
+  vehicleId: string;
+  status: string;
+  rejectionReason?: string;
+  submittedAt?: string;
+  reviewedAt?: unknown;
+  reviewedBy?: string;
+};
+
+export default function RenewVehicleLicenseScreen() {
   const { user } = useAuth();
 
-  const licence = user?.driverLicense;
+  const [renewalRequests, setRenewalRequests] = useState<
+    Record<string, RenewalRequest>
+  >({});
+  const [loadingRequests, setLoadingRequests] = useState(true);
+  const [submittingVehicleId, setSubmittingVehicleId] = useState<
+    string | null
+  >(null);
 
-  const [fullName, setFullName] = useState(user?.fullName ?? "");
-  const [phone, setPhone] = useState(user?.phone ?? "");
-  const [address, setAddress] = useState(
-    (user as any)?.address ?? ""
-  );
-  const [postalAddress, setPostalAddress] = useState(
-    (user as any)?.postalAddress ?? ""
-  );
-  const [emergencyContact, setEmergencyContact] = useState(
-    (user as any)?.emergencyContact ?? ""
-  );
-  const [medicalConditions, setMedicalConditions] = useState(
-    (user as any)?.medicalConditions ?? ""
-  );
-  const [organDonor, setOrganDonor] = useState(
-    (user as any)?.organDonor ? "Yes" : "No"
-  );
-  const [collectionCentre, setCollectionCentre] = useState(
-    user?.collection?.location ?? ""
-  );
+  // Listen for renewal decisions in Firestore.
+  useEffect(() => {
+    console.log(
+      "[Renewal Debug] Screen mounted. Citizen ID:",
+      user?.idNumber
+    );
 
-  const [saving, setSaving] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+    if (!user?.idNumber) {
+      console.warn(
+        "[Renewal Debug] No citizen ID found in AuthContext."
+      );
+      setRenewalRequests({});
+      setLoadingRequests(false);
+      return;
+    }
+
+    setLoadingRequests(true);
+
+    console.log(
+      "[Renewal Debug] Firebase collection: vehicleRenewalRequests"
+    );
+    console.log(
+      "[Renewal Debug] Query condition: citizenId ==",
+      user.idNumber
+    );
+
+    const requestsQuery = query(
+      collection(db, "vehicleRenewalRequests"),
+      where("citizenId", "==", user.idNumber)
+    );
+
+    const unsubscribe = onSnapshot(
+      requestsQuery,
+      (snapshot) => {
+        console.log(
+          "[Renewal Debug] Snapshot received. Document count:",
+          snapshot.size
+        );
+
+        console.log(
+          "[Renewal Debug] Snapshot metadata:",
+          {
+            fromCache: snapshot.metadata.fromCache,
+            hasPendingWrites: snapshot.metadata.hasPendingWrites,
+          }
+        );
+
+        const requests: Record<string, RenewalRequest> = {};
+
+        snapshot.docs.forEach((requestDoc) => {
+          const data = requestDoc.data();
+          const vehicleId = data.vehicleId || requestDoc.id;
+
+          console.log("-----------------------------------");
+          console.log(
+            "[Renewal Debug] Firestore document ID:",
+            requestDoc.id
+          );
+          console.log(
+            "[Renewal Debug] Vehicle ID:",
+            vehicleId
+          );
+          console.log(
+            "[Renewal Debug] Saved citizen ID:",
+            data.citizenId
+          );
+          console.log(
+            "[Renewal Debug] Registration:",
+            data.registrationNumber
+          );
+          console.log(
+            "[Renewal Debug] Status received from Firebase:",
+            data.status
+          );
+          console.log(
+            "[Renewal Debug] Rejection reason:",
+            data.rejectionReason
+          );
+          console.log(
+            "[Renewal Debug] Full Firestore document:",
+            data
+          );
+
+          requests[vehicleId] = {
+            vehicleId,
+            status: data.status || "Pending",
+            rejectionReason: data.rejectionReason || "",
+            submittedAt: data.submittedAt || "",
+            reviewedAt: data.reviewedAt,
+            reviewedBy: data.reviewedBy || "",
+          };
+        });
+
+        console.log(
+          "[Renewal Debug] Vehicle IDs found:",
+          Object.keys(requests)
+        );
+
+        console.log(
+          "[Renewal Debug] Status map:",
+          Object.fromEntries(
+            Object.entries(requests).map(([id, request]) => [
+              id,
+              request.status,
+            ])
+          )
+        );
+
+        setRenewalRequests(requests);
+        setLoadingRequests(false);
+      },
+      (error) => {
+        console.error(
+          "[Renewal Debug] Firestore listener error code:",
+          error.code
+        );
+        console.error(
+          "[Renewal Debug] Firestore listener error message:",
+          error.message
+        );
+
+        setLoadingRequests(false);
+
+        Alert.alert(
+          "Unable to load renewal status",
+          `Firebase error: ${error.code || error.message}`
+        );
+      }
+    );
+
+    return () => {
+      console.log("[Renewal Debug] Stopping Firestore listener.");
+      unsubscribe();
+    };
+  }, [user?.idNumber]);
 
   if (!user) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#0F172A" />
+        <ActivityIndicator size="large" color="#003366" />
         <Text style={styles.loadingText}>
-          Loading your licence information...
+          Loading your account...
         </Text>
       </View>
     );
   }
 
-  const expired =
-    !!licence?.expiryDate &&
-    new Date(licence.expiryDate) <= new Date();
+  const vehicles = user.vehicles ?? [];
 
-  async function saveChanges() {
-    try {
-      setSaving(true);
+  async function submitRenewal(vehicle: any) {
+    const vehicleId = vehicle.vehicleId;
 
-      await updateDoc(doc(db, "citizens", user.idNumber!), {
-        fullName,
-        phone,
-        address,
-        postalAddress,
-        emergencyContact,
-        medicalConditions,
-        organDonor: organDonor === "Yes",
-        "collection.location": collectionCentre,
-      });
+    console.log("[Renewal Debug] Submit button pressed:", {
+      vehicleId,
+      registrationNumber: vehicle.registrationNumber,
+      citizenId: user.idNumber,
+    });
 
+    if (!vehicleId) {
       Alert.alert(
-        "Information Saved",
-        "Your personal information has been successfully updated."
-      );
-    } catch (e) {
-      console.log(e);
-
-      Alert.alert(
-        "Update Failed",
-        "We could not save your information. Please try again."
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function submitRenewal() {
-    if (!fullName.trim() || !phone.trim()) {
-      Alert.alert(
-        "Missing Information",
-        "Please make sure your full name and phone number are completed."
+        "Vehicle information missing",
+        "This vehicle does not have a vehicle ID. Please contact support."
       );
       return;
     }
 
+    if (!user.idNumber) {
+      Alert.alert(
+        "Account information missing",
+        "Your ID number could not be found. Please sign in again."
+      );
+      return;
+    }
+
+    const existingRequest = renewalRequests[vehicleId];
+    const currentStatus = existingRequest
+      ? normalizeStatus(existingRequest.status)
+      : null;
+
+    console.log("[Renewal Debug] Existing request before submission:", {
+      vehicleId,
+      existingRequest,
+      normalizedStatus: currentStatus,
+    });
+
+    if (currentStatus === "Pending") {
+      Alert.alert(
+        "Request already submitted",
+        "Your renewal request is awaiting administrative review."
+      );
+      return;
+    }
+
+    if (currentStatus === "Approved") {
+      Alert.alert(
+        "Already approved",
+        "This vehicle's renewal request has already been approved."
+      );
+      return;
+    }
+
+    const message =
+      currentStatus === "Rejected"
+        ? "Your previous request was rejected. Would you like to submit it again?"
+        : "Submit a vehicle licence renewal request for administrative review?";
+
+    Alert.alert("Confirm renewal request", message, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Submit",
+        onPress: () => {
+          void saveRenewal(vehicle);
+        },
+      },
+    ]);
+  }
+
+  async function saveRenewal(vehicle: any) {
+    const vehicleId = vehicle.vehicleId;
+
     try {
-      setSubmitting(true);
+      setSubmittingVehicleId(vehicleId);
 
-      await setDoc(
-        doc(db, "renewalRequests", user.idNumber!),
-        {
-          citizenId: user.idNumber,
-          fullName,
-          phone,
-          submittedAt: new Date().toISOString(),
-          status: "Pending",
+      const requestRef = doc(
+        db,
+        "vehicleRenewalRequests",
+        vehicleId
+      );
 
-          licence: {
-            number: licence?.number,
-            class: licence?.class,
-            issueDate: licence?.issueDate,
-            expiryDate: licence?.expiryDate,
-          },
+      console.log(
+        "[Renewal Debug] Writing renewal request to:",
+        "vehicleRenewalRequests/" + vehicleId
+      );
 
-          updatedInformation: {
-            address,
-            postalAddress,
-            emergencyContact,
-            medicalConditions,
-            organDonor: organDonor === "Yes",
-            collectionCentre,
-          },
-        }
+      await setDoc(requestRef, {
+        citizenId: user.idNumber,
+        fullName: user.fullName || "",
+        vehicleId,
+        registrationNumber: vehicle.registrationNumber || "",
+        make: vehicle.make || "",
+        model: vehicle.model || "",
+        licenceDisk: vehicle.licenceDisk || null,
+        submittedAt: new Date().toISOString(),
+        status: "Pending",
+        rejectionReason: "",
+        reviewedAt: null,
+        reviewedBy: "",
+        updatedAt: new Date().toISOString(),
+      });
+
+      console.log(
+        "[Renewal Debug] Request saved successfully. Status set to Pending."
       );
 
       Alert.alert(
-        "Application Submitted",
-        "Your driver's licence renewal application has been submitted successfully."
+        "Request submitted",
+        "Your vehicle licence renewal request has been submitted and is awaiting administrative review."
       );
-    } catch (e) {
-      console.log(e);
+    } catch (error: any) {
+      console.error(
+        "[Renewal Debug] Submission failed:",
+        error?.code,
+        error?.message,
+        error
+      );
 
       Alert.alert(
-        "Submission Failed",
-        "We were unable to submit your renewal application. Please try again."
+        "Submission failed",
+        error?.message || "Unable to submit your request. Please try again."
       );
     } finally {
-      setSubmitting(false);
+      setSubmittingVehicleId(null);
     }
   }
 
   return (
-    <View style={styles.screen}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
-      >
-        {/* =====================================================
-            HEADER
-        ===================================================== */}
-
-        <View style={styles.header}>
-          <View style={styles.headerIcon}>
-            <MaterialIcons
-              name="badge"
-              size={28}
-              color="#FFFFFF"
-            />
-          </View>
-
-          <View style={styles.headerText}>
-            <Text style={styles.title}>
-              Renew Driver Licence
-            </Text>
-
-            <Text style={styles.subtitle}>
-              Review your information before submitting your renewal.
-            </Text>
-          </View>
-        </View>
-
-        {/* =====================================================
-            LICENCE STATUS
-        ===================================================== */}
-
-        <View
-          style={[
-            styles.statusCard,
-            expired
-              ? styles.statusExpired
-              : styles.statusValid,
-          ]}
-        >
-          <View
-            style={[
-              styles.statusIcon,
-              expired
-                ? styles.statusIconExpired
-                : styles.statusIconValid,
-            ]}
-          >
-            <MaterialIcons
-              name={expired ? "warning" : "verified"}
-              size={25}
-              color={expired ? "#DC2626" : "#15803D"}
-            />
-          </View>
-
-          <View style={styles.statusContent}>
-            <Text
-              style={[
-                styles.statusTitle,
-                {
-                  color: expired
-                    ? "#991B1B"
-                    : "#166534",
-                },
-              ]}
-            >
-              {expired
-                ? "Licence Expired"
-                : "Licence Valid"}
-            </Text>
-
-            <Text style={styles.statusDescription}>
-              {expired
-                ? "Your driver's licence has expired. You can submit your renewal application below."
-                : "Your driver's licence is currently valid. You can still review your details and prepare your renewal."}
-            </Text>
-          </View>
-        </View>
-
-        {/* =====================================================
-            CURRENT LICENCE
-        ===================================================== */}
-
-        <SectionHeader
-          icon="card-membership"
-          title="Current Licence"
-          description="Your existing licence information"
-        />
-
-        <View style={styles.licenceCard}>
-          <View style={styles.licenceTop}>
-            <View>
-              <Text style={styles.licenceLabel}>
-                LICENCE NUMBER
-              </Text>
-
-              <Text style={styles.licenceNumber}>
-                {licence?.number || "Not available"}
-              </Text>
-            </View>
-
-            <View style={styles.classBadge}>
-              <Text style={styles.classBadgeLabel}>
-                CLASS
-              </Text>
-
-              <Text style={styles.classBadgeValue}>
-                {licence?.class || "—"}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.divider} />
-
-          <View style={styles.licenceDetails}>
-            <InfoRow
-              icon="event"
-              label="Issue Date"
-              value={licence?.issueDate || "Not available"}
-            />
-
-            <InfoRow
-              icon="event-busy"
-              label="Expiry Date"
-              value={licence?.expiryDate || "Not available"}
-            />
-          </View>
-        </View>
-
-        {/* =====================================================
-            PERSONAL INFORMATION
-        ===================================================== */}
-
-        <SectionHeader
-          icon="person-outline"
-          title="Personal Information"
-          description="Make sure your details are correct"
-        />
-
-        <View style={styles.formCard}>
-          <InputField
-            label="Full Name"
-            value={fullName}
-            onChangeText={setFullName}
-            icon="person-outline"
-            placeholder="Enter your full name"
-          />
-
-          <InputField
-            label="Phone Number"
-            value={phone}
-            onChangeText={setPhone}
-            icon="call-outline"
-            placeholder="Enter your phone number"
-            keyboardType="phone-pad"
-          />
-
-          <InputField
-            label="Residential Address"
-            value={address}
-            onChangeText={setAddress}
-            icon="location-outline"
-            placeholder="Enter your residential address"
-            multiline
-          />
-
-          <InputField
-            label="Postal Address"
-            value={postalAddress}
-            onChangeText={setPostalAddress}
-            icon="mail-outline"
-            placeholder="Enter your postal address"
-            multiline
-          />
-        </View>
-
-        {/* =====================================================
-            ADDITIONAL INFORMATION
-        ===================================================== */}
-
-        <SectionHeader
-          icon="medical-information"
-          title="Additional Information"
-          description="Information required for your renewal"
-        />
-
-        <View style={styles.formCard}>
-          <InputField
-            label="Emergency Contact"
-            value={emergencyContact}
-            onChangeText={setEmergencyContact}
-            icon="contact-phone"
-            placeholder="Enter emergency contact"
-            keyboardType="phone-pad"
-          />
-
-          <InputField
-            label="Medical Conditions"
-            value={medicalConditions}
-            onChangeText={setMedicalConditions}
-            icon="medical-services"
-            placeholder="Enter any relevant medical conditions"
-            multiline
-          />
-
-          {/* ORGAN DONOR */}
-
-          <View style={styles.fieldContainer}>
-            <Text style={styles.fieldLabel}>
-              Organ Donor
-            </Text>
-
-            <View style={styles.optionRow}>
-              <TouchableOpacity
-                style={[
-                  styles.optionButton,
-                  organDonor === "Yes" &&
-                    styles.optionButtonActive,
-                ]}
-                onPress={() => setOrganDonor("Yes")}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons
-                  name={
-                    organDonor === "Yes"
-                      ? "radio-button-checked"
-                      : "radio-button-unchecked"
-                  }
-                  size={20}
-                  color={
-                    organDonor === "Yes"
-                      ? "#FFFFFF"
-                      : "#64748B"
-                  }
-                />
-
-                <Text
-                  style={[
-                    styles.optionText,
-                    organDonor === "Yes" &&
-                      styles.optionTextActive,
-                  ]}
-                >
-                  Yes
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.optionButton,
-                  organDonor === "No" &&
-                    styles.optionButtonActive,
-                ]}
-                onPress={() => setOrganDonor("No")}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons
-                  name={
-                    organDonor === "No"
-                      ? "radio-button-checked"
-                      : "radio-button-unchecked"
-                  }
-                  size={20}
-                  color={
-                    organDonor === "No"
-                      ? "#FFFFFF"
-                      : "#64748B"
-                  }
-                />
-
-                <Text
-                  style={[
-                    styles.optionText,
-                    organDonor === "No" &&
-                      styles.optionTextActive,
-                  ]}
-                >
-                  No
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <InputField
-            label="Preferred Collection Centre"
-            value={collectionCentre}
-            onChangeText={setCollectionCentre}
-            icon="location-city"
-            placeholder="Enter preferred collection centre"
-          />
-        </View>
-
-        {/* =====================================================
-            IMPORTANT NOTICE
-        ===================================================== */}
-
-        <View style={styles.noticeCard}>
-          <View style={styles.noticeIcon}>
-            <Ionicons
-              name="information"
-              size={18}
-              color="#1D4ED8"
-            />
-          </View>
-
-          <View style={styles.noticeContent}>
-            <Text style={styles.noticeTitle}>
-              Before you submit
-            </Text>
-
-            <Text style={styles.noticeText}>
-              Please check that all your personal information
-              is accurate. Incorrect information may delay the
-              processing of your renewal application.
-            </Text>
-          </View>
-        </View>
-
-        {/* =====================================================
-            ACTIONS
-        ===================================================== */}
-
-        <TouchableOpacity
-          style={[
-            styles.saveButton,
-            saving && styles.disabledButton,
-          ]}
-          onPress={saveChanges}
-          disabled={saving || submitting}
-          activeOpacity={0.85}
-        >
-          {saving ? (
-            <ActivityIndicator color="#0F172A" />
-          ) : (
-            <>
-              <MaterialIcons
-                name="save"
-                size={20}
-                color="#0F172A"
-              />
-
-              <Text style={styles.saveButtonText}>
-                Save Changes
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.submitButton,
-            submitting && styles.disabledSubmitButton,
-          ]}
-          onPress={submitRenewal}
-          disabled={saving || submitting}
-          activeOpacity={0.85}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <>
-              <MaterialIcons
-                name="send"
-                size={20}
-                color="#FFFFFF"
-              />
-
-              <Text style={styles.submitButtonText}>
-                Submit Renewal Application
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <Text style={styles.footerText}>
-          By submitting, you confirm that the information
-          provided is accurate and up to date.
-        </Text>
-      </ScrollView>
-    </View>
-  );
-}
-
-/* =========================================================
-   SECTION HEADER
-========================================================= */
-
-function SectionHeader({
-  icon,
-  title,
-  description,
-}: {
-  icon: keyof typeof MaterialIcons.glyphMap;
-  title: string;
-  description: string;
-}) {
-  return (
-    <View style={styles.sectionHeader}>
-      <View style={styles.sectionIcon}>
-        <MaterialIcons
-          name={icon}
-          size={20}
-          color="#0F172A"
-        />
-      </View>
-
-      <View style={styles.sectionHeaderText}>
-        <Text style={styles.sectionTitle}>
-          {title}
-        </Text>
-
-        <Text style={styles.sectionDescription}>
-          {description}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-/* =========================================================
-   INPUT FIELD
-========================================================= */
-
-function InputField({
-  label,
-  value,
-  onChangeText,
-  icon,
-  placeholder,
-  keyboardType,
-  multiline,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (text: string) => void;
-  icon: keyof typeof Ionicons.glyphMap | keyof typeof MaterialIcons.glyphMap;
-  placeholder: string;
-  keyboardType?: "default" | "phone-pad" | "email-address";
-  multiline?: boolean;
-}) {
-  return (
-    <View style={styles.fieldContainer}>
-      <Text style={styles.fieldLabel}>
-        {label}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{ paddingBottom: 40 }}
+    >
+      <Text style={styles.title}>
+        Renew Vehicle Licence
       </Text>
 
-      <View
-        style={[
-          styles.inputWrapper,
-          multiline && styles.multilineWrapper,
-        ]}
-      >
-        <Ionicons
-          name={icon as keyof typeof Ionicons.glyphMap}
-          size={19}
-          color="#64748B"
-          style={styles.inputIcon}
-        />
+      <Text style={styles.subtitle}>
+        Select a vehicle to renew its licence disk and track your application.
+      </Text>
 
-        <TextInput
-          style={[
-            styles.input,
-            multiline && styles.multilineInput,
-          ]}
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor="#94A3B8"
-          keyboardType={keyboardType}
-          multiline={multiline}
-          textAlignVertical={multiline ? "top" : "center"}
-        />
-      </View>
-    </View>
+      {loadingRequests && (
+        <View style={styles.loadingBanner}>
+          <ActivityIndicator size="small" color="#003366" />
+          <Text style={styles.loadingBannerText}>
+            Checking your renewal requests...
+          </Text>
+        </View>
+      )}
+
+      {!loadingRequests && (
+        <Text style={styles.debugSummary}>
+          Renewal requests found: {Object.keys(renewalRequests).length}
+        </Text>
+      )}
+
+      {vehicles.length === 0 ? (
+        <View style={styles.empty}>
+          <MaterialIcons
+            name="directions-car"
+            size={60}
+            color="#999"
+          />
+          <Text style={styles.emptyText}>
+            No registered vehicles found.
+          </Text>
+        </View>
+      ) : (
+        vehicles.map((vehicle: any, index: number) => {
+          const expired =
+            !!vehicle.licenceDisk?.expiryDate &&
+            new Date(vehicle.licenceDisk.expiryDate) <= new Date();
+
+          const request = vehicle.vehicleId
+            ? renewalRequests[vehicle.vehicleId]
+            : undefined;
+
+          const requestStatus = request
+            ? normalizeStatus(request.status)
+            : null;
+
+          const isSubmitting =
+            submittingVehicleId === vehicle.vehicleId;
+
+          const alreadyPending = requestStatus === "Pending";
+          const alreadyApproved = requestStatus === "Approved";
+
+          console.log("[Renewal Debug] Vehicle displayed:", {
+            vehicleId: vehicle.vehicleId,
+            registrationNumber: vehicle.registrationNumber,
+            requestFound: !!request,
+            rawStatus: request?.status,
+            displayedStatus: requestStatus,
+          });
+
+          return (
+            <View
+              key={vehicle.vehicleId || index}
+              style={styles.card}
+            >
+              <View style={styles.header}>
+                <MaterialIcons
+                  name="directions-car"
+                  size={35}
+                  color="#003366"
+                />
+
+                <View style={{ marginLeft: 12, flex: 1 }}>
+                  <Text style={styles.vehicle}>
+                    {vehicle.make} {vehicle.model}
+                  </Text>
+                  <Text style={styles.registration}>
+                    {vehicle.registrationNumber || "No registration number"}
+                  </Text>
+                </View>
+              </View>
+
+              <Row
+                label="Licence Disk"
+                value={vehicle.licenceDisk?.number}
+              />
+              <Row
+                label="Expiry Date"
+                value={vehicle.licenceDisk?.expiryDate}
+              />
+              <Row
+                label="Disk Status"
+                value={vehicle.licenceDisk?.status}
+              />
+
+              <View
+                style={[
+                  styles.status,
+                  {
+                    backgroundColor: expired ? "#FDECEA" : "#E8F5E9",
+                  },
+                ]}
+              >
+                <MaterialIcons
+                  name={expired ? "warning" : "verified"}
+                  size={24}
+                  color={expired ? "#D32F2F" : "#2E7D32"}
+                />
+                <Text
+                  style={{
+                    color: expired ? "#D32F2F" : "#2E7D32",
+                    marginLeft: 10,
+                    fontWeight: "700",
+                    flex: 1,
+                  }}
+                >
+                  {expired
+                    ? "Licence Disk Expired"
+                    : "Licence Disk Valid"}
+                </Text>
+              </View>
+
+              {requestStatus ? (
+                <View
+                  style={[
+                    styles.requestStatusCard,
+                    requestStatus === "Pending" && styles.pendingCard,
+                    requestStatus === "Approved" && styles.approvedCard,
+                    requestStatus === "Rejected" && styles.rejectedCard,
+                  ]}
+                >
+                  <View style={styles.requestStatusHeading}>
+                    <MaterialIcons
+                      name={
+                        requestStatus === "Pending"
+                          ? "hourglass-top"
+                          : requestStatus === "Approved"
+                          ? "check-circle"
+                          : "cancel"
+                      }
+                      size={23}
+                      color={
+                        requestStatus === "Pending"
+                          ? "#946200"
+                          : requestStatus === "Approved"
+                          ? "#237A3B"
+                          : "#C62828"
+                      }
+                    />
+
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.requestStatusLabel}>
+                        Renewal Request
+                      </Text>
+                      <Text
+                        style={[
+                          styles.requestStatusValue,
+                          requestStatus === "Pending" && { color: "#946200" },
+                          requestStatus === "Approved" && { color: "#237A3B" },
+                          requestStatus === "Rejected" && { color: "#C62828" },
+                        ]}
+                      >
+                        {requestStatus}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {requestStatus === "Pending" && (
+                    <Text style={styles.requestStatusDescription}>
+                      Your request is waiting for administrative review.
+                    </Text>
+                  )}
+
+                  {requestStatus === "Approved" && (
+                    <Text style={styles.requestStatusDescription}>
+                      Your renewal request has been approved. Follow any
+                      further instructions from the relevant authority.
+                    </Text>
+                  )}
+
+                  {requestStatus === "Rejected" && (
+                    <>
+                      <Text style={styles.requestStatusDescription}>
+                        Your renewal request was not approved.
+                      </Text>
+
+                      {!!request.rejectionReason && (
+                        <View style={styles.reasonBox}>
+                          <Text style={styles.reasonTitle}>
+                            Reason provided by administration
+                          </Text>
+                          <Text style={styles.reasonText}>
+                            {request.rejectionReason}
+                          </Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+
+                  {!!request.submittedAt && (
+                    <Text style={styles.submittedDate}>
+                      Submitted: {formatDate(request.submittedAt)}
+                    </Text>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.noRequestCard}>
+                  <MaterialIcons
+                    name="info-outline"
+                    size={20}
+                    color="#526174"
+                  />
+                  <Text style={styles.noRequestText}>
+                    No renewal request was found for this vehicle.
+                  </Text>
+                </View>
+              )}
+
+              {alreadyPending || alreadyApproved ? (
+                <View style={styles.disabledButton}>
+                  <MaterialIcons
+                    name={alreadyApproved ? "check-circle" : "schedule"}
+                    size={21}
+                    color="#fff"
+                  />
+                  <Text style={styles.buttonText}>
+                    {alreadyApproved
+                      ? "Request Approved"
+                      : "Awaiting Review"}
+                  </Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    isSubmitting && styles.buttonDisabled,
+                  ]}
+                  disabled={isSubmitting}
+                  onPress={() => submitRenewal(vehicle)}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <MaterialIcons
+                      name="refresh"
+                      size={22}
+                      color="#fff"
+                    />
+                  )}
+                  <Text style={styles.buttonText}>
+                    {isSubmitting
+                      ? "Submitting..."
+                      : requestStatus === "Rejected"
+                      ? "Resubmit Renewal Request"
+                      : "Renew Licence Disk"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })
+      )}
+    </ScrollView>
   );
 }
 
-/* =========================================================
-   INFO ROW
-========================================================= */
+function normalizeStatus(status?: string) {
+  const value = (status || "").trim().toLowerCase();
 
-function InfoRow({
-  icon,
+  if (value === "approved" || value === "accepted") {
+    return "Approved";
+  }
+
+  if (value === "rejected" || value === "declined") {
+    return "Rejected";
+  }
+
+  if (value === "pending") {
+    return "Pending";
+  }
+
+  return status || "Unknown";
+}
+
+function formatDate(value?: string) {
+  if (!value) return "Not provided";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function Row({
   label,
   value,
 }: {
-  icon: keyof typeof MaterialIcons.glyphMap;
   label: string;
-  value: string;
+  value?: string;
 }) {
   return (
-    <View style={styles.infoRow}>
-      <View style={styles.infoRowIcon}>
-        <MaterialIcons
-          name={icon}
-          size={18}
-          color="#64748B"
-        />
-      </View>
-
-      <View style={styles.infoRowText}>
-        <Text style={styles.infoRowLabel}>
-          {label}
-        </Text>
-
-        <Text style={styles.infoRowValue}>
-          {value}
-        </Text>
-      </View>
+    <View style={styles.row}>
+      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.value}>{value || "-"}</Text>
     </View>
   );
 }
 
-/* =========================================================
-   STYLES
-========================================================= */
-
 const styles = StyleSheet.create({
-  screen: {
+  container: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
-  },
-
-  content: {
+    backgroundColor: "#F5F7FA",
     padding: 20,
-    paddingBottom: 45,
   },
-
   loading: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F8FAFC",
   },
-
   loadingText: {
-    marginTop: 12,
-    fontSize: 13,
-    color: "#64748B",
+    marginTop: 10,
+    color: "#666",
   },
-
-  /* HEADER */
-
+  title: {
+    fontSize: 28,
+    fontWeight: "bold",
+    color: "#003366",
+  },
+  subtitle: {
+    color: "#666",
+    marginTop: 5,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  debugSummary: {
+    color: "#526174",
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  loadingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#EAF2FA",
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  loadingBannerText: {
+    color: "#003366",
+    marginLeft: 10,
+    fontSize: 13,
+  },
+  empty: {
+    backgroundColor: "#fff",
+    padding: 40,
+    borderRadius: 15,
+    alignItems: "center",
+  },
+  emptyText: {
+    marginTop: 15,
+    color: "#666",
+  },
+  card: {
+    backgroundColor: "#fff",
+    padding: 20,
+    borderRadius: 15,
+    marginBottom: 20,
+    elevation: 3,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 20,
   },
-
-  headerIcon: {
-    width: 54,
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: "#0F172A",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 14,
+  vehicle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#003366",
   },
-
-  headerText: {
-    flex: 1,
+  registration: {
+    color: "#666",
+    marginTop: 3,
   },
-
-  title: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#0F172A",
-    letterSpacing: -0.5,
-  },
-
-  subtitle: {
-    marginTop: 4,
-    fontSize: 12,
-    lineHeight: 17,
-    color: "#64748B",
-  },
-
-  /* STATUS */
-
-  statusCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    borderRadius: 18,
-    marginBottom: 26,
-    borderWidth: 1,
-  },
-
-  statusValid: {
-    backgroundColor: "#F0FDF4",
-    borderColor: "#BBF7D0",
-  },
-
-  statusExpired: {
-    backgroundColor: "#FEF2F2",
-    borderColor: "#FECACA",
-  },
-
-  statusIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 13,
-  },
-
-  statusIconValid: {
-    backgroundColor: "#DCFCE7",
-  },
-
-  statusIconExpired: {
-    backgroundColor: "#FEE2E2",
-  },
-
-  statusContent: {
-    flex: 1,
-  },
-
-  statusTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-  },
-
-  statusDescription: {
-    marginTop: 4,
-    fontSize: 11,
-    lineHeight: 17,
-    color: "#64748B",
-  },
-
-  /* SECTION */
-
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-
-  sectionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 11,
-    backgroundColor: "#E2E8F0",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 11,
-  },
-
-  sectionHeaderText: {
-    flex: 1,
-  },
-
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-
-  sectionDescription: {
-    marginTop: 2,
-    fontSize: 11,
-    color: "#64748B",
-  },
-
-  /* LICENCE CARD */
-
-  licenceCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 26,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
-
-  licenceTop: {
+  row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    gap: 12,
+    marginVertical: 8,
   },
-
-  licenceLabel: {
-    fontSize: 9,
-    fontWeight: "800",
-    color: "#94A3B8",
-    letterSpacing: 0.8,
+  label: {
+    color: "#666",
+    fontWeight: "600",
   },
-
-  licenceNumber: {
-    marginTop: 5,
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-
-  classBadge: {
-    minWidth: 58,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 11,
-    backgroundColor: "#F1F5F9",
-    alignItems: "center",
-  },
-
-  classBadgeLabel: {
-    fontSize: 8,
-    fontWeight: "800",
-    color: "#94A3B8",
-  },
-
-  classBadgeValue: {
-    marginTop: 2,
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-
-  divider: {
-    height: 1,
-    backgroundColor: "#E2E8F0",
-    marginVertical: 16,
-  },
-
-  licenceDetails: {
-    flexDirection: "row",
-  },
-
-  infoRow: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  infoRowIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: "#F1F5F9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 8,
-  },
-
-  infoRowText: {
-    flex: 1,
-  },
-
-  infoRowLabel: {
-    fontSize: 9,
-    color: "#94A3B8",
+  value: {
+    flexShrink: 1,
+    textAlign: "right",
     fontWeight: "700",
+    color: "#263238",
   },
-
-  infoRowValue: {
-    marginTop: 2,
-    fontSize: 11,
-    color: "#334155",
-    fontWeight: "700",
-  },
-
-  /* FORM */
-
-  formCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 26,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
-
-  fieldContainer: {
-    marginBottom: 17,
-  },
-
-  fieldContainerLast: {
-    marginBottom: 0,
-  },
-
-  fieldLabel: {
-    marginBottom: 7,
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#334155",
-  },
-
-  inputWrapper: {
-    minHeight: 50,
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
+  status: {
+    marginTop: 20,
+    padding: 15,
     borderRadius: 12,
-    backgroundColor: "#F8FAFC",
-  },
-
-  multilineWrapper: {
-    alignItems: "flex-start",
-    paddingTop: 13,
-  },
-
-  inputIcon: {
-    marginLeft: 13,
-    marginRight: 8,
-  },
-
-  input: {
-    flex: 1,
-    minHeight: 48,
-    paddingHorizontal: 4,
-    paddingRight: 12,
-    fontSize: 13,
-    color: "#0F172A",
-  },
-
-  multilineInput: {
-    minHeight: 85,
-    paddingTop: 0,
-  },
-
-  /* OPTIONS */
-
-  optionRow: {
     flexDirection: "row",
+    alignItems: "center",
+  },
+  requestStatusCard: {
+    marginTop: 16,
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  pendingCard: {
+    backgroundColor: "#FFF8E6",
+    borderColor: "#F0D89B",
+  },
+  approvedCard: {
+    backgroundColor: "#EAF7ED",
+    borderColor: "#B8E0C1",
+  },
+  rejectedCard: {
+    backgroundColor: "#FFF0F0",
+    borderColor: "#F1C0C0",
+  },
+  requestStatusHeading: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
-
-  optionButton: {
-    flex: 1,
-    minHeight: 48,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "#F8FAFC",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-  },
-
-  optionButtonActive: {
-    backgroundColor: "#0F172A",
-    borderColor: "#0F172A",
-  },
-
-  optionText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#475569",
-  },
-
-  optionTextActive: {
-    color: "#FFFFFF",
-  },
-
-  /* NOTICE */
-
-  noticeCard: {
-    flexDirection: "row",
-    padding: 15,
-    borderRadius: 15,
-    backgroundColor: "#EFF6FF",
-    borderWidth: 1,
-    borderColor: "#DBEAFE",
-    marginBottom: 20,
-  },
-
-  noticeIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    backgroundColor: "#DBEAFE",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-
-  noticeContent: {
-    flex: 1,
-  },
-
-  noticeTitle: {
+  requestStatusLabel: {
+    color: "#526174",
     fontSize: 12,
-    fontWeight: "800",
-    color: "#1E3A8A",
   },
-
-  noticeText: {
-    marginTop: 3,
+  requestStatusValue: {
+    fontSize: 17,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  requestStatusDescription: {
+    color: "#4D5968",
+    lineHeight: 19,
+    fontSize: 13,
+    marginTop: 12,
+  },
+  reasonBox: {
+    marginTop: 12,
+    padding: 11,
+    backgroundColor: "#fff",
+    borderRadius: 8,
+  },
+  reasonTitle: {
+    fontWeight: "700",
+    fontSize: 12,
+    color: "#8F2020",
+    marginBottom: 5,
+  },
+  reasonText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#5E2525",
+  },
+  submittedDate: {
+    marginTop: 12,
     fontSize: 11,
-    lineHeight: 17,
-    color: "#475569",
+    color: "#697586",
   },
-
-  /* BUTTONS */
-
-  saveButton: {
-    minHeight: 54,
-    borderRadius: 14,
-    backgroundColor: "#E2E8F0",
-    alignItems: "center",
-    justifyContent: "center",
+  noRequestCard: {
     flexDirection: "row",
+    alignItems: "center",
     gap: 8,
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: "#F0F3F7",
+    borderRadius: 10,
   },
-
-  saveButtonText: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: "#0F172A",
+  noRequestText: {
+    flex: 1,
+    color: "#526174",
+    fontSize: 12,
+    lineHeight: 18,
   },
-
-  submitButton: {
-    minHeight: 56,
-    marginTop: 11,
-    borderRadius: 14,
-    backgroundColor: "#0F172A",
-    alignItems: "center",
-    justifyContent: "center",
+  button: {
+    marginTop: 20,
+    backgroundColor: "#003366",
+    borderRadius: 12,
+    padding: 15,
     flexDirection: "row",
-    gap: 9,
+    justifyContent: "center",
+    alignItems: "center",
   },
-
-  submitButtonText: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
-
-  disabledButton: {
-    opacity: 0.6,
-  },
-
-  disabledSubmitButton: {
+  buttonDisabled: {
     opacity: 0.65,
   },
-
-  footerText: {
-    marginTop: 14,
-    paddingHorizontal: 10,
-    textAlign: "center",
-    fontSize: 10,
-    lineHeight: 15,
-    color: "#94A3B8",
+  disabledButton: {
+    marginTop: 20,
+    backgroundColor: "#718096",
+    borderRadius: 12,
+    padding: 15,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  buttonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    marginLeft: 10,
+    fontSize: 15,
   },
 });
-

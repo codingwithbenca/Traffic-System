@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -13,9 +13,8 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import {
   collection,
   onSnapshot,
-  orderBy,
   query,
-  Timestamp,
+  where,
 } from "firebase/firestore";
 import { useNavigation } from "@react-navigation/native";
 
@@ -26,30 +25,18 @@ import { useAuth } from "../../context/AuthContext";
    TYPES
 ========================================================= */
 
-type ApplicationStatus =
-  | "Submitted"
-  | "Pending"
-  | "Processing"
-  | "In Review"
-  | "Approved"
-  | "Completed"
-  | "Rejected";
-
 type Application = {
   id: string;
-
-  service: string;
-  type?: string;
-
-  status: ApplicationStatus;
-
+  applicationId?: string;
   reference?: string;
-
-  submittedAt?: Timestamp | Date | string;
-
-  createdAt?: Timestamp | Date | string;
-  updatedAt?: Timestamp | Date | string;
-
+  service?: string;
+  type?: string;
+  status?: string;
+  submittedAt?: any;
+  createdAt?: any;
+  updatedAt?: any;
+  userId?: string;
+  submittedBy?: string;
   vehicle?: {
     vehicleId?: string;
     registrationNumber?: string;
@@ -57,87 +44,95 @@ type Application = {
     make?: string;
     model?: string;
   };
+  review?: {
+    notes?: string | null;
+    reviewedAt?: any;
+  };
 };
 
 /* =========================================================
    STATUS CONFIG
 ========================================================= */
 
-function getStatusConfig(status: ApplicationStatus) {
-  switch (status) {
-    case "Submitted":
-      return {
-        background: "#EFF6FF",
-        text: "#2563EB",
-        icon: "paper-plane-outline" as const,
-      };
+function getStatusConfig(status?: string) {
+  const normalized = (status || "Submitted")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, " ");
 
-    case "Pending":
+  switch (normalized) {
+    case "approved":
       return {
-        background: "#FEF3C7",
-        text: "#B45309",
-        icon: "time-outline" as const,
-      };
-
-    case "Processing":
-      return {
-        background: "#DBEAFE",
-        text: "#1D4ED8",
-        icon: "sync-outline" as const,
-      };
-
-    case "In Review":
-      return {
-        background: "#F3E8FF",
-        text: "#7E22CE",
-        icon: "eye-outline" as const,
-      };
-
-    case "Approved":
-      return {
+        label: "Approved",
         background: "#DCFCE7",
         text: "#15803D",
         icon: "checkmark-circle-outline" as const,
       };
 
-    case "Completed":
+    case "completed":
       return {
+        label: "Completed",
         background: "#E2E8F0",
         text: "#475569",
         icon: "checkmark-done-outline" as const,
       };
 
-    case "Rejected":
+    case "rejected":
       return {
+        label: "Rejected",
         background: "#FEE2E2",
         text: "#B91C1C",
         icon: "close-circle-outline" as const,
       };
 
+    case "pending":
+      return {
+        label: "Pending",
+        background: "#FEF3C7",
+        text: "#B45309",
+        icon: "time-outline" as const,
+      };
+
+    case "processing":
+      return {
+        label: "Processing",
+        background: "#DBEAFE",
+        text: "#1D4ED8",
+        icon: "sync-outline" as const,
+      };
+
+    case "in review":
+    case "under review":
+      return {
+        label: "Under Review",
+        background: "#F3E8FF",
+        text: "#7E22CE",
+        icon: "eye-outline" as const,
+      };
+
     default:
       return {
-        background: "#E2E8F0",
-        text: "#475569",
-        icon: "document-outline" as const,
+        label:
+          normalized.charAt(0).toUpperCase() +
+          normalized.slice(1),
+        background: "#EFF6FF",
+        text: "#2563EB",
+        icon: "paper-plane-outline" as const,
       };
   }
 }
 
 /* =========================================================
-   DATE FORMATTER
+   DATE HELPERS
 ========================================================= */
 
-function formatDate(
-  value?: Timestamp | Date | string
-) {
-  if (!value) {
-    return "Date unavailable";
-  }
+function toDate(value: any): Date | null {
+  if (!value) return null;
 
   try {
     let date: Date;
 
-    if (value instanceof Timestamp) {
+    if (typeof value.toDate === "function") {
       date = value.toDate();
     } else if (value instanceof Date) {
       date = value;
@@ -145,18 +140,48 @@ function formatDate(
       date = new Date(value);
     }
 
-    if (Number.isNaN(date.getTime())) {
-      return "Date unavailable";
-    }
-
-    return date.toLocaleDateString("en-ZA", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
+    return Number.isNaN(date.getTime()) ? null : date;
   } catch {
-    return "Date unavailable";
+    return null;
   }
+}
+
+function formatDate(value?: any): string {
+  const date = toDate(value);
+
+  if (!date) return "Date unavailable";
+
+  return date.toLocaleDateString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function getApplicationTime(application: Application): number {
+  const date = toDate(
+    application.submittedAt || application.createdAt
+  );
+
+  return date ? date.getTime() : 0;
+}
+
+/* =========================================================
+   APPLICATION TITLE
+========================================================= */
+
+function getApplicationTitle(application: Application): string {
+  if (
+    application.type === "ownership_transfer"
+  ) {
+    return "Change Vehicle Ownership";
+  }
+
+  return (
+    application.service ||
+    application.type ||
+    "Citizen Service"
+  );
 }
 
 /* =========================================================
@@ -165,86 +190,158 @@ function formatDate(
 
 export default function ApplicationsDashboardScreen() {
   const navigation = useNavigation<any>();
-
   const { user, loading: authLoading } = useAuth();
 
-  const [applications, setApplications] =
-    useState<Application[]>([]);
-
+  const [applications, setApplications] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const [refreshing, setRefreshing] =
-    useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   /* =======================================================
      FETCH APPLICATIONS
+
+     Supports:
+     1. applications documents matched by userId.
+     2. Legacy applications matched by submittedBy.
+     3. Existing citizens/{idNumber}/applications documents.
+
+     Results are combined and duplicate documents removed.
   ======================================================= */
 
   useEffect(() => {
-    if (authLoading) {
-      return;
-    }
+    if (authLoading) return;
 
-    if (!user?.idNumber) {
+    const userId = user?.id;
+    const idNumber = user?.idNumber;
+
+    if (!userId && !idNumber) {
       setApplications([]);
       setLoading(false);
+      setRefreshing(false);
+      setFetchError(false);
       return;
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * Your AuthContext currently does not expose
-     * the Firestore document ID directly.
-     *
-     * If your citizen document ID is the user's ID number,
-     * this is correct.
-     *
-     * citizens/{idNumber}/applications
-     */
+    setLoading(true);
+    setFetchError(false);
 
-    const applicationsRef = collection(
-      db,
-      "citizens",
-      user.idNumber,
-      "applications"
-    );
+    const sources: any[] = [];
 
-    const applicationsQuery = query(
-      applicationsRef,
-      orderBy("submittedAt", "desc")
-    );
+    // Main collection: applications created by the logged-in user.
+    if (userId) {
+      sources.push(
+        query(
+          collection(db, "applications"),
+          where("userId", "==", userId)
+        )
+      );
+    }
 
-    const unsubscribe = onSnapshot(
-      applicationsQuery,
-      (snapshot) => {
-        const data: Application[] =
-          snapshot.docs.map((document) => ({
-            id: document.id,
-            ...(document.data() as Omit<
-              Application,
-              "id"
-            >),
-          }));
+    // Backward compatibility with older application records.
+    if (idNumber) {
+      sources.push(
+        query(
+          collection(db, "applications"),
+          where("submittedBy", "==", idNumber)
+        )
+      );
 
-        setApplications(data);
-        setLoading(false);
-        setRefreshing(false);
-      },
-      (error) => {
-        console.log(
-          "Applications fetch error:",
-          error
-        );
+      // Also support applications saved in the older
+      // citizen-specific subcollection.
+      sources.push(
+        collection(
+          db,
+          "citizens",
+          idNumber,
+          "applications"
+        )
+      );
+    }
 
-        setApplications([]);
+    if (sources.length === 0) {
+      setApplications([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    const sourceRecords = new Map<number, Application[]>();
+    const initializedSources = new Set<number>();
+    const failedSources = new Set<number>();
+
+    const publishApplications = () => {
+      const combined = new Map<string, Application>();
+
+      sourceRecords.forEach((records) => {
+        records.forEach((application) => {
+          const existing = combined.get(application.id);
+
+          // Keep one copy of a document found by both queries.
+          if (!existing) {
+            combined.set(application.id, application);
+          } else {
+            combined.set(application.id, {
+              ...existing,
+              ...application,
+              vehicle: {
+                ...existing.vehicle,
+                ...application.vehicle,
+              },
+            });
+          }
+        });
+      });
+
+      const sorted = Array.from(combined.values()).sort(
+        (a, b) => getApplicationTime(b) - getApplicationTime(a)
+      );
+
+      setApplications(sorted);
+      setFetchError(failedSources.size === sources.length);
+
+      if (initializedSources.size === sources.length) {
         setLoading(false);
         setRefreshing(false);
       }
+    };
+
+    const unsubscribers = sources.map((source, index) =>
+      onSnapshot(
+        source,
+        (snapshot) => {
+          failedSources.delete(index);
+          initializedSources.add(index);
+
+          const records: Application[] = snapshot.docs.map(
+            (document: any) => ({
+              ...document.data(),
+              id: document.id,
+            })
+          );
+
+          sourceRecords.set(index, records);
+          publishApplications();
+        },
+        (error) => {
+          console.error(
+            `Applications query ${index + 1} failed:`,
+            error
+          );
+
+          failedSources.add(index);
+          initializedSources.add(index);
+          sourceRecords.set(index, []);
+
+          publishApplications();
+        }
+      )
     );
 
-    return unsubscribe;
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
   }, [
+    user?.id,
     user?.idNumber,
     authLoading,
   ]);
@@ -253,35 +350,27 @@ export default function ApplicationsDashboardScreen() {
      REFRESH
   ======================================================= */
 
-  const handleRefresh = () => {
-    /*
-     * Firestore onSnapshot already keeps this screen
-     * synchronized in real time.
-     *
-     * Setting refreshing briefly gives the user
-     * visual feedback when pulling down.
-     */
-
+  const handleRefresh = useCallback(() => {
+    // Firestore listeners automatically receive fresh data.
+    // This provides pull-to-refresh feedback.
     setRefreshing(true);
 
     setTimeout(() => {
       setRefreshing(false);
     }, 700);
-  };
+  }, []);
 
   /* =======================================================
      OPEN APPLICATION
+
+     Pass the document ID used by the existing
+     ApplicationDetails route.
   ======================================================= */
 
-  const openApplication = (
-    application: Application
-  ) => {
-    navigation.navigate(
-      "ApplicationDetails",
-      {
-        applicationId: application.id,
-      }
-    );
+  const openApplication = (application: Application) => {
+    navigation.navigate("ApplicationDetails", {
+      applicationId: application.id,
+    });
   };
 
   /* =======================================================
@@ -291,10 +380,7 @@ export default function ApplicationsDashboardScreen() {
   if (authLoading || loading) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator
-          size="large"
-          color="#0B4F8A"
-        />
+        <ActivityIndicator size="large" color="#0B4F8A" />
 
         <Text style={styles.loadingText}>
           Loading your applications...
@@ -307,30 +393,27 @@ export default function ApplicationsDashboardScreen() {
      SUMMARY COUNTS
   ======================================================= */
 
-  const totalApplications =
-    applications.length;
+  const totalApplications = applications.length;
 
-  const activeApplications =
-    applications.filter(
-      (application) =>
-        application.status ===
-          "Submitted" ||
-        application.status ===
-          "Pending" ||
-        application.status ===
-          "Processing" ||
-        application.status ===
-          "In Review"
-    ).length;
+  const activeApplications = applications.filter((application) => {
+    const status = (application.status || "Submitted")
+      .toLowerCase()
+      .replace(/_/g, " ");
 
-  const completedApplications =
-    applications.filter(
-      (application) =>
-        application.status ===
-          "Completed" ||
-        application.status ===
-          "Approved"
-    ).length;
+    return [
+      "submitted",
+      "pending",
+      "processing",
+      "in review",
+      "under review",
+    ].includes(status);
+  }).length;
+
+  const completedApplications = applications.filter((application) => {
+    const status = (application.status || "").toLowerCase();
+
+    return status === "approved" || status === "completed";
+  }).length;
 
   /* =======================================================
      RENDER
@@ -338,16 +421,12 @@ export default function ApplicationsDashboardScreen() {
 
   return (
     <View style={styles.screen}>
-      {/* =================================================
-          HEADER
-      ================================================= */}
+      {/* HEADER */}
 
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() =>
-            navigation.goBack()
-          }
+          onPress={() => navigation.goBack()}
           activeOpacity={0.8}
         >
           <Ionicons
@@ -362,23 +441,17 @@ export default function ApplicationsDashboardScreen() {
             Applications
           </Text>
 
-          <Text
-            style={styles.headerSubtitle}
-          >
+          <Text style={styles.headerSubtitle}>
             View and track your applications
           </Text>
         </View>
       </View>
 
-      {/* =================================================
-          CONTENT
-      ================================================= */}
+      {/* CONTENT */}
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={
-          styles.content
-        }
+        contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -386,9 +459,7 @@ export default function ApplicationsDashboardScreen() {
           />
         }
       >
-        {/* =================================================
-            SUMMARY
-        ================================================= */}
+        {/* SUMMARY CARD */}
 
         <View style={styles.summaryCard}>
           <View style={styles.summaryHeader}>
@@ -400,134 +471,93 @@ export default function ApplicationsDashboardScreen() {
               />
             </View>
 
-            <View
-              style={
-                styles.summaryInformation
-              }
-            >
-              <Text
-                style={
-                  styles.summaryTitle
-                }
-              >
+            <View style={styles.summaryInformation}>
+              <Text style={styles.summaryTitle}>
                 Your Applications
               </Text>
 
-              <Text
-                style={
-                  styles.summaryDescription
-                }
-              >
-                Track applications submitted
-                through Citizen Services.
+              <Text style={styles.summaryDescription}>
+                Track applications submitted through Citizen Services.
               </Text>
             </View>
           </View>
 
           <View style={styles.summaryStats}>
-            <View
-              style={styles.summaryStat}
-            >
-              <Text
-                style={
-                  styles.summaryStatNumber
-                }
-              >
+            <View style={styles.summaryStat}>
+              <Text style={styles.summaryStatNumber}>
                 {totalApplications}
               </Text>
-
-              <Text
-                style={
-                  styles.summaryStatLabel
-                }
-              >
+              <Text style={styles.summaryStatLabel}>
                 Total
               </Text>
             </View>
 
-            <View
-              style={styles.summaryDivider}
-            />
+            <View style={styles.summaryDivider} />
 
-            <View
-              style={styles.summaryStat}
-            >
-              <Text
-                style={
-                  styles.summaryStatNumber
-                }
-              >
+            <View style={styles.summaryStat}>
+              <Text style={styles.summaryStatNumber}>
                 {activeApplications}
               </Text>
-
-              <Text
-                style={
-                  styles.summaryStatLabel
-                }
-              >
+              <Text style={styles.summaryStatLabel}>
                 Active
               </Text>
             </View>
 
-            <View
-              style={styles.summaryDivider}
-            />
+            <View style={styles.summaryDivider} />
 
-            <View
-              style={styles.summaryStat}
-            >
-              <Text
-                style={
-                  styles.summaryStatNumber
-                }
-              >
+            <View style={styles.summaryStat}>
+              <Text style={styles.summaryStatNumber}>
                 {completedApplications}
               </Text>
-
-              <Text
-                style={
-                  styles.summaryStatLabel
-                }
-              >
+              <Text style={styles.summaryStatLabel}>
                 Completed
               </Text>
             </View>
           </View>
         </View>
 
-        {/* =================================================
-            SECTION HEADER
-        ================================================= */}
+        {/* FETCH ERROR */}
 
-        <View
-          style={styles.sectionHeader}
-        >
-          <Text
-            style={styles.sectionTitle}
-          >
+        {fetchError && (
+          <View style={styles.errorBox}>
+            <Ionicons
+              name="cloud-offline-outline"
+              size={21}
+              color="#B42318"
+            />
+
+            <View style={{ flex: 1, marginLeft: 9 }}>
+              <Text style={styles.errorTitle}>
+                Could not load all applications
+              </Text>
+
+              <Text style={styles.errorText}>
+                Check your connection and pull down to refresh.
+                Some application records may be unavailable.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* SECTION HEADER */}
+
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>
             Application History
           </Text>
 
-          <View
-            style={styles.countBadge}
-          >
-            <Text
-              style={styles.countText}
-            >
+          <View style={styles.countBadge}>
+            <Text style={styles.countText}>
               {applications.length}
             </Text>
           </View>
         </View>
 
-        {/* =================================================
-            EMPTY STATE
-        ================================================= */}
+        {/* EMPTY STATE */}
 
         {applications.length === 0 && (
           <View style={styles.emptyCard}>
-            <View
-              style={styles.emptyIcon}
-            >
+            <View style={styles.emptyIcon}>
               <Ionicons
                 name="document-text-outline"
                 size={30}
@@ -535,185 +565,133 @@ export default function ApplicationsDashboardScreen() {
               />
             </View>
 
-            <Text
-              style={styles.emptyTitle}
-            >
-              No Applications Yet
+            <Text style={styles.emptyTitle}>
+              {fetchError
+                ? "Applications unavailable"
+                : "No Applications Yet"}
             </Text>
 
-            <Text
-              style={styles.emptyText}
-            >
-              Applications you submit through
-              Citizen Services will appear here.
+            <Text style={styles.emptyText}>
+              {fetchError
+                ? "We could not retrieve your application records. Please try again."
+                : "Applications you submit through Citizen Services will appear here."}
             </Text>
           </View>
         )}
 
-        {/* =================================================
-            APPLICATIONS
-        ================================================= */}
+        {/* APPLICATION LIST */}
 
-        {applications.map(
-          (application) => {
-            const status =
-              getStatusConfig(
-                application.status
-              );
+        {applications.map((application) => {
+          const status = getStatusConfig(application.status);
 
-            return (
-              <TouchableOpacity
-                key={application.id}
-                style={styles.applicationCard}
-                activeOpacity={0.8}
-                onPress={() =>
-                  openApplication(
-                    application
-                  )
-                }
-              >
-                {/* ICON */}
+          const reference =
+            application.reference ||
+            application.applicationId ||
+            application.id;
 
-                <View
-                  style={
-                    styles.applicationIcon
-                  }
+          const vehicleName = [
+            application.vehicle?.make,
+            application.vehicle?.model,
+          ]
+            .filter(Boolean)
+            .join(" ");
+
+          return (
+            <TouchableOpacity
+              key={application.id}
+              style={styles.applicationCard}
+              activeOpacity={0.8}
+              onPress={() => openApplication(application)}
+            >
+              <View style={styles.applicationIcon}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={23}
+                  color="#0B4F8A"
+                />
+              </View>
+
+              <View style={styles.applicationInformation}>
+                <Text
+                  style={styles.applicationTitle}
+                  numberOfLines={2}
                 >
-                  <Ionicons
-                    name="document-text-outline"
-                    size={23}
-                    color="#0B4F8A"
-                  />
-                </View>
+                  {getApplicationTitle(application)}
+                </Text>
 
-                {/* INFORMATION */}
-
-                <View
-                  style={
-                    styles.applicationInformation
-                  }
-                >
-                  <Text
-                    style={
-                      styles.applicationTitle
-                    }
-                    numberOfLines={2}
-                  >
-                    {application.service ||
-                      application.type ||
-                      "Citizen Service"}
+                {!!vehicleName && (
+                  <Text style={styles.vehicleName}>
+                    {vehicleName}
                   </Text>
+                )}
 
-                  {application.vehicle
-                    ?.registrationNumber && (
-                    <View
-                      style={
-                        styles.vehicleRow
-                      }
-                    >
-                      <Ionicons
-                        name="car-outline"
-                        size={13}
-                        color="#64748B"
-                      />
-
-                      <Text
-                        style={
-                          styles.vehicleText
-                        }
-                      >
-                        {
-                          application
-                            .vehicle
-                            .registrationNumber
-                        }
-                      </Text>
-                    </View>
-                  )}
-
-                  <View
-                    style={
-                      styles.metaRow
-                    }
-                  >
+                {!!application.vehicle?.registrationNumber && (
+                  <View style={styles.vehicleRow}>
                     <Ionicons
-                      name="calendar-outline"
+                      name="car-outline"
                       size={13}
                       color="#64748B"
                     />
 
-                    <Text
-                      style={
-                        styles.metaText
-                      }
-                    >
-                      Submitted{" "}
-                      {formatDate(
-                        application.submittedAt ||
-                          application.createdAt
-                      )}
+                    <Text style={styles.vehicleText}>
+                      {application.vehicle.registrationNumber}
                     </Text>
                   </View>
+                )}
 
-                  {application.reference && (
-                    <Text
-                      style={
-                        styles.reference
-                      }
-                    >
-                      Reference:{" "}
-                      {application.reference}
-                    </Text>
-                  )}
+                <View style={styles.metaRow}>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={13}
+                    color="#64748B"
+                  />
 
-                  {/* STATUS */}
-
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      {
-                        backgroundColor:
-                          status.background,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={status.icon}
-                      size={13}
-                      color={status.text}
-                    />
-
-                    <Text
-                      style={[
-                        styles.statusText,
-                        {
-                          color:
-                            status.text,
-                        },
-                      ]}
-                    >
-                      {
-                        application.status
-                      }
-                    </Text>
-                  </View>
+                  <Text style={styles.metaText}>
+                    Submitted{" "}
+                    {formatDate(
+                      application.submittedAt ||
+                        application.createdAt
+                    )}
+                  </Text>
                 </View>
 
-                {/* CHEVRON */}
+                <Text style={styles.reference}>
+                  Reference: {reference}
+                </Text>
 
-                <Ionicons
-                  name="chevron-forward"
-                  size={19}
-                  color="#94A3B8"
-                />
-              </TouchableOpacity>
-            );
-          }
-        )}
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: status.background },
+                  ]}
+                >
+                  <Ionicons
+                    name={status.icon}
+                    size={13}
+                    color={status.text}
+                  />
 
-        {/* =================================================
-            INFORMATION
-        ================================================= */}
+                  <Text
+                    style={[
+                      styles.statusText,
+                      { color: status.text },
+                    ]}
+                  >
+                    {status.label}
+                  </Text>
+                </View>
+              </View>
+
+              <Ionicons
+                name="chevron-forward"
+                size={19}
+                color="#94A3B8"
+              />
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* INFORMATION */}
 
         {applications.length > 0 && (
           <View style={styles.infoBox}>
@@ -723,12 +701,9 @@ export default function ApplicationsDashboardScreen() {
               color="#0B4F8A"
             />
 
-            <Text
-              style={styles.infoText}
-            >
-              Application statuses are updated
-              as your applications move through
-              the processing stages.
+            <Text style={styles.infoText}>
+              Application statuses are updated as your applications
+              move through the processing stages.
             </Text>
           </View>
         )}
@@ -747,10 +722,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFC",
   },
 
-  /* =======================================================
-     LOADING
-  ======================================================= */
-
   loadingScreen: {
     flex: 1,
     backgroundColor: "#F8FAFC",
@@ -763,10 +734,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#64748B",
   },
-
-  /* =======================================================
-     HEADER
-  ======================================================= */
 
   header: {
     backgroundColor: "#FFFFFF",
@@ -805,18 +772,10 @@ const styles = StyleSheet.create({
     color: "#66737F",
   },
 
-  /* =======================================================
-     CONTENT
-  ======================================================= */
-
   content: {
     padding: 20,
     paddingBottom: 40,
   },
-
-  /* =======================================================
-     SUMMARY
-  ======================================================= */
 
   summaryCard: {
     backgroundColor: "#FFFFFF",
@@ -892,10 +851,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#D9E0E6",
   },
 
-  /* =======================================================
-     SECTION
-  ======================================================= */
-
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -924,10 +879,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#0B4F8A",
   },
-
-  /* =======================================================
-     APPLICATION CARD
-  ======================================================= */
 
   applicationCard: {
     backgroundColor: "#FFFFFF",
@@ -961,6 +912,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 
+  vehicleName: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#475569",
+    fontWeight: "600",
+  },
+
   vehicleRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -989,12 +947,8 @@ const styles = StyleSheet.create({
   reference: {
     marginTop: 5,
     fontSize: 10,
-    color: "#94A3B8",
+    color: "#64748B",
   },
-
-  /* =======================================================
-     STATUS
-  ======================================================= */
 
   statusBadge: {
     alignSelf: "flex-start",
@@ -1011,10 +965,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
   },
-
-  /* =======================================================
-     EMPTY
-  ======================================================= */
 
   emptyCard: {
     backgroundColor: "#FFFFFF",
@@ -1049,9 +999,27 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  /* =======================================================
-     INFORMATION
-  ======================================================= */
+  errorBox: {
+    marginBottom: 18,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: "#FEECEC",
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+
+  errorTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#B42318",
+  },
+
+  errorText: {
+    marginTop: 4,
+    fontSize: 11,
+    lineHeight: 17,
+    color: "#7F1D1D",
+  },
 
   infoBox: {
     marginTop: 12,

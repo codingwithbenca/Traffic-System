@@ -2,19 +2,16 @@
 import {
   addDoc,
   collection,
+  doc,
   getDocs,
   query,
-  updateDoc,
-  doc,
+  runTransaction,
   serverTimestamp,
   where,
 } from "firebase/firestore";
 
 import { db } from "./firebase";
-
-import type {
-  AppointmentBookingData,
-} from "../types/appointment";
+import type { AppointmentBookingData } from "../types/appointment";
 
 /* =========================================================
    TYPES
@@ -31,10 +28,15 @@ export type AppointmentStatus =
   | "completed"
   | "cancelled";
 
+export type AppointmentActionType =
+  | "cancellation"
+  | "rescheduling";
+
+export const APPOINTMENT_PENALTY_AMOUNT = 150;
+
 export interface FirestoreAppointment {
   id: string;
   userId: string;
-
   appointmentNumber: string;
 
   service: {
@@ -56,12 +58,24 @@ export interface FirestoreAppointment {
 
   date: string;
   time: string;
-
   status: AppointmentStatus;
-
   createdAt?: any;
   updatedAt?: any;
 }
+
+type AppointmentActionInput = {
+  appointmentId: string;
+  userId: string;
+  citizenId: string;
+  reason: string;
+  actionId: string;
+};
+
+type RescheduleAppointmentInput =
+  AppointmentActionInput & {
+    newDate: string;
+    newTime: string;
+  };
 
 /* =========================================================
    CREATE APPOINTMENT
@@ -74,30 +88,8 @@ export const createAppointment = async ({
   appointmentId: string;
   appointmentNumber: string;
 }> => {
-  console.log("========================================");
-  console.log(
-    "🔥 CREATE APPOINTMENT SERVICE STARTED"
-  );
-  console.log("========================================");
-
-  console.log(
-    "[appointmentService] userId:",
-    userId
-  );
-
-  console.log(
-    "[appointmentService] booking:",
-    booking
-  );
-
   if (!userId) {
-    console.error(
-      "[appointmentService] ❌ Missing userId"
-    );
-
-    throw new Error(
-      "User ID is required."
-    );
+    throw new Error("User ID is required.");
   }
 
   if (
@@ -106,96 +98,54 @@ export const createAppointment = async ({
     !booking.date ||
     !booking.time
   ) {
-    console.error(
-      "[appointmentService] ❌ Incomplete booking"
-    );
-
-    throw new Error(
-      "Incomplete appointment information."
-    );
+    throw new Error("Incomplete appointment information.");
   }
 
-  const appointmentsRef = collection(
-    db,
-    "appointments"
-  );
-
-  const appointmentNumber =
-    `APT-${Date.now()}`;
+  const appointmentNumber = `APT-${Date.now()}`;
 
   const appointmentData = {
     userId,
-
     appointmentNumber,
 
     service: {
       id: booking.service.id,
       name: booking.service.name,
-      description:
-        booking.service.description,
-      duration:
-        booking.service.duration ?? null,
+      description: booking.service.description ?? null,
+      duration: booking.service.duration ?? null,
     },
 
     branch: {
       id: booking.branch.id,
       name: booking.branch.name,
-      address:
-        booking.branch.address ?? null,
-      city:
-        booking.branch.city ?? null,
-      province:
-        booking.branch.province ?? null,
-      phone:
-        booking.branch.phone ?? null,
-      hours:
-        booking.branch.hours ?? null,
+      address: booking.branch.address ?? null,
+      city: booking.branch.city ?? null,
+      province: booking.branch.province ?? null,
+      phone: booking.branch.phone ?? null,
+      hours: booking.branch.hours ?? null,
     },
 
     date: booking.date,
     time: booking.time,
-
     status: "confirmed",
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
 
-  console.log(
-    "[appointmentService] Writing appointment:",
+  const appointmentRef = await addDoc(
+    collection(db, "appointments"),
     appointmentData
   );
 
-  try {
-    const appointmentRef =
-      await addDoc(
-        appointmentsRef,
-        appointmentData
-      );
+  console.log("[appointmentService] Appointment created:", {
+    appointmentId: appointmentRef.id,
+    appointmentNumber,
+  });
 
-    console.log(
-      "[appointmentService] ✅ Appointment created:",
-      appointmentRef.id
-    );
-
-    console.log(
-      "[appointmentService] Reference:",
-      appointmentNumber
-    );
-
-    return {
-      appointmentId:
-        appointmentRef.id,
-      appointmentNumber,
-    };
-  } catch (error) {
-    console.error(
-      "[appointmentService] ❌ Create failed:",
-      error
-    );
-
-    throw error;
-  }
+  return {
+    appointmentId: appointmentRef.id,
+    appointmentNumber,
+  };
 };
 
 /* =========================================================
@@ -205,87 +155,201 @@ export const createAppointment = async ({
 export const getMyAppointments = async (
   userId: string
 ): Promise<FirestoreAppointment[]> => {
-  console.log("========================================");
-  console.log(
-    "📅 GET MY APPOINTMENTS STARTED"
-  );
-  console.log("========================================");
-
-  console.log(
-    "[appointmentService] userId:",
-    userId
-  );
-
   if (!userId) {
-    throw new Error(
-      "User ID is required."
-    );
+    throw new Error("User ID is required.");
   }
 
-  try {
-    const appointmentsRef =
-      collection(db, "appointments");
+  const appointmentsQuery = query(
+    collection(db, "appointments"),
+    where("userId", "==", userId)
+  );
 
-    const q = query(
-      appointmentsRef,
-      where("userId", "==", userId)
+  const snapshot = await getDocs(appointmentsQuery);
+
+  const appointments = snapshot.docs.map((appointmentDoc) => ({
+    ...appointmentDoc.data(),
+    id: appointmentDoc.id,
+  })) as FirestoreAppointment[];
+
+  appointments.sort((a, b) => {
+    return `${a.date} ${a.time}`.localeCompare(
+      `${b.date} ${b.time}`
     );
+  });
 
-    console.log(
-      "[appointmentService] Querying Firestore..."
-    );
+  console.log(
+    "[appointmentService] Appointments loaded:",
+    appointments.length
+  );
 
-    const snapshot =
-      await getDocs(q);
+  return appointments;
+};
 
-    console.log(
-      "[appointmentService] Documents found:",
-      snapshot.size
-    );
+/* =========================================================
+   VALIDATE ACTION INPUT
+========================================================= */
 
-    const appointments =
-      snapshot.docs.map((appointmentDoc) => {
-        const data =
-          appointmentDoc.data();
+const validateActionInput = (
+  input: AppointmentActionInput
+) => {
+  if (!input.appointmentId.trim()) {
+    throw new Error("Appointment ID is required.");
+  }
 
-        return {
-          id: appointmentDoc.id,
-          ...data,
-        } as FirestoreAppointment;
-      });
+  if (!input.userId.trim()) {
+    throw new Error("User ID is required.");
+  }
 
-    /*
-     * Sort newest/relevant appointments first.
-     *
-     * We intentionally sort in JavaScript so we
-     * don't need a composite Firestore index.
-     */
-    appointments.sort((a, b) => {
-      const dateA =
-        `${a.date} ${a.time}`;
+  if (!input.citizenId.trim()) {
+    throw new Error("Citizen ID is required.");
+  }
 
-      const dateB =
-        `${b.date} ${b.time}`;
+  if (!input.reason.trim()) {
+    throw new Error("Please provide a reason.");
+  }
 
-      return dateA.localeCompare(
-        dateB
+  if (!input.actionId.trim()) {
+    throw new Error("Action ID is required.");
+  }
+};
+
+/* =========================================================
+   RECORD PENALTY AND UPDATE APPOINTMENT
+========================================================= */
+
+const applyAppointmentPenalty = async (
+  input: AppointmentActionInput,
+  actionType: AppointmentActionType,
+  newSchedule?: {
+    date: string;
+    time: string;
+  }
+): Promise<void> => {
+  validateActionInput(input);
+
+  if (
+    actionType === "rescheduling" &&
+    (!newSchedule?.date || !newSchedule?.time)
+  ) {
+    throw new Error("The new appointment date and time are required.");
+  }
+
+  const appointmentRef = doc(
+    db,
+    "appointments",
+    input.appointmentId
+  );
+
+  // The caller must reuse the same actionId when retrying
+  // the same operation. This prevents a retry from creating
+  // a second penalty document for that action.
+  const penaltyRef = doc(
+    db,
+    "fines",
+    input.actionId
+  );
+
+  await runTransaction(db, async (transaction) => {
+    const appointmentSnapshot =
+      await transaction.get(appointmentRef);
+
+    if (!appointmentSnapshot.exists()) {
+      throw new Error("Appointment not found.");
+    }
+
+    const appointment = appointmentSnapshot.data();
+
+    // Never let a citizen apply an action to someone else's booking.
+    if (appointment.userId !== input.userId) {
+      throw new Error("You are not authorised to change this appointment.");
+    }
+
+    if (
+      appointment.status !== "confirmed" &&
+      appointment.status !== "pending"
+    ) {
+      throw new Error(
+        "Only pending or confirmed appointments can be changed."
       );
-    });
+    }
 
-    console.log(
-      "[appointmentService] ✅ Appointments loaded:",
-      appointments.length
-    );
+    const penaltySnapshot = await transaction.get(penaltyRef);
 
-    return appointments;
-  } catch (error) {
-    console.error(
-      "[appointmentService] ❌ Failed to load appointments:",
-      error
-    );
+    // A repeated action ID must not create another charge.
+    if (penaltySnapshot.exists()) {
+      const existingPenalty = penaltySnapshot.data();
 
-    throw error;
-  }
+      if (
+        existingPenalty.appointmentId !== input.appointmentId ||
+        existingPenalty.citizenId !== input.citizenId ||
+        existingPenalty.type !== actionType
+      ) {
+        throw new Error(
+          "This action ID has already been used for another operation."
+        );
+      }
+
+      // The same operation was already recorded.
+      return;
+    }
+
+    const penaltyRecord = {
+      citizenId: input.citizenId,
+      appointmentId: input.appointmentId,
+      appointmentNumber: appointment.appointmentNumber ?? input.appointmentId,
+
+      type: actionType,
+      category: "appointment_penalty",
+      offence:
+        actionType === "cancellation"
+          ? "Appointment cancellation penalty"
+          : "Appointment rescheduling penalty",
+
+      description:
+        actionType === "cancellation"
+          ? "Penalty charged for cancelling an appointment."
+          : "Penalty charged for rescheduling an appointment.",
+
+      reason: input.reason.trim(),
+
+      amount: APPOINTMENT_PENALTY_AMOUNT,
+      fineAmount: APPOINTMENT_PENALTY_AMOUNT,
+      outstandingAmount: APPOINTMENT_PENALTY_AMOUNT,
+
+      currency: "ZAR",
+      status: "outstanding",
+      paymentStatus: "outstanding",
+
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    transaction.set(penaltyRef, penaltyRecord);
+
+    if (actionType === "cancellation") {
+      transaction.update(appointmentRef, {
+        status: "cancelled",
+        cancellationReason: input.reason.trim(),
+        cancellationPenaltyId: input.actionId,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.update(appointmentRef, {
+        date: newSchedule!.date,
+        time: newSchedule!.time,
+        reschedulingReason: input.reason.trim(),
+        lastReschedulingPenaltyId: input.actionId,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+
+  console.log("[appointmentService] Appointment action completed:", {
+    appointmentId: input.appointmentId,
+    actionType,
+    penaltyId: input.actionId,
+    amount: APPOINTMENT_PENALTY_AMOUNT,
+  });
 };
 
 /* =========================================================
@@ -293,50 +357,36 @@ export const getMyAppointments = async (
 ========================================================= */
 
 export const cancelAppointment = async (
-  appointmentId: string
+  input: AppointmentActionInput
 ): Promise<void> => {
-  console.log("========================================");
-  console.log(
-    "❌ CANCEL APPOINTMENT STARTED"
-  );
-  console.log("========================================");
+  console.log("[appointmentService] Cancellation requested:", {
+    appointmentId: input.appointmentId,
+    actionId: input.actionId,
+  });
 
-  console.log(
-    "[appointmentService] appointmentId:",
-    appointmentId
-  );
-
-  if (!appointmentId) {
-    throw new Error(
-      "Appointment ID is required."
-    );
-  }
-
-  try {
-    const appointmentRef = doc(
-      db,
-      "appointments",
-      appointmentId
-    );
-
-    await updateDoc(
-      appointmentRef,
-      {
-        status: "cancelled",
-        updatedAt: serverTimestamp(),
-      }
-    );
-
-    console.log(
-      "[appointmentService] ✅ Appointment cancelled"
-    );
-  } catch (error) {
-    console.error(
-      "[appointmentService] ❌ Cancellation failed:",
-      error
-    );
-
-    throw error;
-  }
+  await applyAppointmentPenalty(input, "cancellation");
 };
 
+/* =========================================================
+   RESCHEDULE APPOINTMENT
+========================================================= */
+
+export const rescheduleAppointment = async (
+  input: RescheduleAppointmentInput
+): Promise<void> => {
+  console.log("[appointmentService] Rescheduling requested:", {
+    appointmentId: input.appointmentId,
+    newDate: input.newDate,
+    newTime: input.newTime,
+    actionId: input.actionId,
+  });
+
+  await applyAppointmentPenalty(
+    input,
+    "rescheduling",
+    {
+      date: input.newDate,
+      time: input.newTime,
+    }
+  );
+};

@@ -1,6 +1,6 @@
-
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   SafeAreaView,
   ScrollView,
@@ -13,10 +13,19 @@ import {
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as DocumentPicker from "expo-document-picker";
 import { useNavigation } from "@react-navigation/native";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
 
-/* =========================================================
-   COLOURS
-========================================================= */
+import { db } from "../../services/firebase";
+import { uploadDocumentToCloudinary } from "../../services/cloudinary";
+import { useAuth } from "../../context/AuthContext";
 
 const COLORS = {
   primary: "#0B4F8A",
@@ -32,11 +41,8 @@ const COLORS = {
   softBlue: "#EAF3FA",
   softGreen: "#ECFDF3",
   softYellow: "#FFF8E6",
+  softRed: "#FEF3F2",
 };
-
-/* =========================================================
-   TYPES
-========================================================= */
 
 type UploadedFile = {
   name: string;
@@ -55,7 +61,6 @@ type RegistrationForm = {
   fullName: string;
   phone: string;
   address: string;
-
   vehicleType: string;
   vin: string;
   engineNumber: string;
@@ -73,9 +78,15 @@ type RegistrationDocuments = {
   roadworthy: UploadedFile | null;
 };
 
-/* =========================================================
-   VEHICLE TYPES
-========================================================= */
+type DocumentKey = keyof RegistrationDocuments;
+
+const DOCUMENT_KEYS: DocumentKey[] = [
+  "idCopy",
+  "proofOfResidence",
+  "proofOfOwnership",
+  "policeClearance",
+  "roadworthy",
+];
 
 const VEHICLE_TYPES: VehicleType[] = [
   {
@@ -100,97 +111,307 @@ const VEHICLE_TYPES: VehicleType[] = [
   },
 ];
 
-/* =========================================================
-   COMPONENT
-========================================================= */
+const INITIAL_FORM: RegistrationForm = {
+  idNumber: "",
+  fullName: "",
+  phone: "",
+  address: "",
+  vehicleType: "",
+  vin: "",
+  engineNumber: "",
+  make: "",
+  model: "",
+  year: "",
+  colour: "",
+};
+
+const INITIAL_DOCUMENTS: RegistrationDocuments = {
+  idCopy: null,
+  proofOfResidence: null,
+  proofOfOwnership: null,
+  policeClearance: null,
+  roadworthy: null,
+};
+
+function normalizeStatus(status: unknown): string {
+  if (typeof status !== "string" || !status.trim()) {
+    return "Submitted";
+  }
+
+  const value = status.trim().toLowerCase();
+
+  if (value === "approved" || value === "accepted") {
+    return "Approved";
+  }
+
+  if (value === "rejected" || value === "declined") {
+    return "Rejected";
+  }
+
+  if (
+    value === "pending" ||
+    value === "submitted" ||
+    value === "awaiting verification" ||
+    value === "under review"
+  ) {
+    return "Pending";
+  }
+
+  return status.trim();
+}
+
+function getRejectionReason(data: Record<string, any>): string {
+  if (
+    typeof data.rejectionReason === "string" &&
+    data.rejectionReason.trim()
+  ) {
+    return data.rejectionReason.trim();
+  }
+
+  if (
+    typeof data.review?.rejectionReason === "string" &&
+    data.review.rejectionReason.trim()
+  ) {
+    return data.review.rejectionReason.trim();
+  }
+
+  return "";
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={styles.summaryValue}>{value}</Text>
+    </View>
+  );
+}
 
 export default function VehicleRegistrationScreen() {
   const navigation = useNavigation<any>();
+  const { user, loading: authLoading, isLoggedIn } = useAuth();
 
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
+  const [checkingExistingApplication, setCheckingExistingApplication] =
+    useState(true);
 
-  const [form, setForm] = useState<RegistrationForm>({
-    idNumber: "",
-    fullName: "",
-    phone: "",
-    address: "",
+  const [submittedApplicationId, setSubmittedApplicationId] =
+    useState<string | null>(null);
 
-    vehicleType: "",
-    vin: "",
-    engineNumber: "",
-    make: "",
-    model: "",
-    year: "",
-    colour: "",
-  });
+  const [submittedApplicationStatus, setSubmittedApplicationStatus] =
+    useState("Submitted");
 
+  const [submittedApplicationRejectionReason, setSubmittedApplicationRejectionReason] =
+    useState("");
+
+  // Saved data of the latest application (used for the summary and resubmit).
+  const [latestApplication, setLatestApplication] =
+    useState<Record<string, any> | null>(null);
+
+  // Resubmit mode: the citizen is fixing a rejected application.
+  const [resubmitMode, setResubmitMode] = useState(false);
+  const [existingDocuments, setExistingDocuments] =
+    useState<Record<string, any>>({});
+
+  const [form, setForm] = useState<RegistrationForm>(INITIAL_FORM);
   const [documents, setDocuments] =
-    useState<RegistrationDocuments>({
-      idCopy: null,
-      proofOfResidence: null,
-      proofOfOwnership: null,
-      policeClearance: null,
-      roadworthy: null,
-    });
+    useState<RegistrationDocuments>(INITIAL_DOCUMENTS);
 
-  /* =======================================================
-     FORM UPDATE
-  ======================================================= */
+  // Fill the applicant details from the signed-in citizen profile.
+  useEffect(() => {
+    if (!user) return;
 
-  const updateForm = (
-    field: keyof RegistrationForm,
-    value: string
-  ) => {
+    const addressValue: unknown = user.address;
+    const addressObject =
+      addressValue && typeof addressValue === "object"
+        ? (addressValue as Record<string, unknown>)
+        : null;
+
+    const formattedAddress =
+      typeof addressValue === "string"
+        ? addressValue
+        : addressObject
+          ? [
+              addressObject.street,
+              addressObject.suburb,
+              addressObject.city,
+              addressObject.province,
+              addressObject.postalCode,
+            ]
+              .filter(
+                (value): value is string =>
+                  typeof value === "string" && value.trim().length > 0
+              )
+              .join(", ")
+          : "";
+
     setForm((previous) => ({
       ...previous,
-      [field]: value,
+      idNumber: previous.idNumber || user.idNumber || "",
+      fullName: previous.fullName || user.fullName || "",
+      phone: previous.phone || user.phone || "",
+      address: previous.address || formattedAddress,
     }));
+  }, [user]);
+
+  // Listen continuously for this citizen's registration application.
+  // Admin dashboard changes will update the confirmation screen automatically.
+  useEffect(() => {
+    if (authLoading) {
+      setCheckingExistingApplication(true);
+      return;
+    }
+
+    if (!user?.id || !isLoggedIn) {
+      setSubmittedApplicationId(null);
+      setSubmittedApplicationStatus("Submitted");
+      setSubmittedApplicationRejectionReason("");
+      setLatestApplication(null);
+      setCheckingExistingApplication(false);
+      return;
+    }
+
+    setCheckingExistingApplication(true);
+
+    const applicationsQuery = query(
+      collection(db, "vehicleApplications"),
+      where("userId", "==", user.id)
+    );
+
+    const unsubscribe = onSnapshot(
+      applicationsQuery,
+      (snapshot) => {
+        if (snapshot.empty) {
+          setSubmittedApplicationId(null);
+          setSubmittedApplicationStatus("Submitted");
+          setSubmittedApplicationRejectionReason("");
+          setLatestApplication(null);
+          setCheckingExistingApplication(false);
+          return;
+        }
+
+        // Show the newest application belonging to this citizen.
+        // "estimate" keeps a just-submitted application (whose server
+        // timestamp is still pending) at the top of the list.
+        const createdAtOf = (
+          snap: (typeof snapshot.docs)[number]
+        ): number =>
+          snap
+            .data({ serverTimestamps: "estimate" })
+            .createdAt?.toMillis?.() ?? 0;
+
+        const sortedApplications = [...snapshot.docs].sort(
+          (a, b) => createdAtOf(b) - createdAtOf(a)
+        );
+
+        const latest = sortedApplications[0];
+        const data = latest.data();
+
+        setSubmittedApplicationId(
+          typeof data.applicationId === "string" && data.applicationId.trim()
+            ? data.applicationId
+            : latest.id
+        );
+
+        const normalized = normalizeStatus(data.status);
+
+        setSubmittedApplicationStatus(normalized);
+        setSubmittedApplicationRejectionReason(getRejectionReason(data));
+        setLatestApplication(data);
+        setCheckingExistingApplication(false);
+
+        console.log("[VehicleRegistration] Application update:", {
+          documentId: latest.id,
+          applicationId: data.applicationId,
+          status: normalized,
+          rejectionReason: getRejectionReason(data),
+        });
+      },
+      (error) => {
+        console.error(
+          "[VehicleRegistration] Application listener failed:",
+          error
+        );
+
+        setCheckingExistingApplication(false);
+
+        Alert.alert(
+          "Application Status Unavailable",
+          "We could not retrieve your application status. Please check your connection and try again."
+        );
+      }
+    );
+
+    return unsubscribe;
+  }, [user?.id, isLoggedIn, authLoading]);
+
+  const updateForm = (field: keyof RegistrationForm, value: string) => {
+    setForm((previous) => ({ ...previous, [field]: value }));
   };
 
-  /* =======================================================
-     DOCUMENT PICKER
-  ======================================================= */
+  // A document is satisfied by a newly picked file, or (when resubmitting)
+  // by the one already saved on the rejected application.
+  const hasDocument = (key: DocumentKey) =>
+    !!documents[key] || (resubmitMode && !!existingDocuments[key]);
 
-  const pickDocument = async (
-    documentType: keyof RegistrationDocuments
-  ) => {
+  const startResubmit = () => {
+    if (!latestApplication) return;
+
+    const applicant = latestApplication.applicant ?? {};
+    const vehicle = latestApplication.vehicle ?? {};
+
+    setForm((previous) => ({
+      ...previous,
+      idNumber: applicant.idNumber ?? previous.idNumber,
+      fullName: applicant.fullName ?? previous.fullName,
+      phone: applicant.phone ?? previous.phone,
+      address: applicant.address ?? previous.address,
+      vehicleType: vehicle.vehicleType ?? "",
+      vin: vehicle.vin ?? "",
+      engineNumber: vehicle.engineNumber ?? "",
+      make: vehicle.make ?? "",
+      model: vehicle.model ?? "",
+      year: vehicle.year ? String(vehicle.year) : "",
+      colour: vehicle.colour ?? "",
+    }));
+
+    setExistingDocuments(latestApplication.documents ?? {});
+    setDocuments(INITIAL_DOCUMENTS);
+    setStep(1);
+    setResubmitMode(true);
+  };
+
+  const cancelResubmit = () => {
+    setResubmitMode(false);
+    setStep(1);
+    setDocuments(INITIAL_DOCUMENTS);
+    setExistingDocuments({});
+  };
+
+  const pickDocument = async (documentType: DocumentKey) => {
     try {
-      const result =
-        await DocumentPicker.getDocumentAsync({
-          type: [
-            "image/*",
-            "application/pdf",
-          ],
-          copyToCacheDirectory: true,
-          multiple: false,
-        });
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["image/*", "application/pdf"],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
 
-      if (result.canceled) {
-        return;
-      }
+      if (result.canceled) return;
 
       const asset = result.assets?.[0];
-
-      if (!asset) {
-        return;
-      }
-
-      const uploadedFile: UploadedFile = {
-        name: asset.name,
-        uri: asset.uri,
-        size: asset.size ?? 0,
-      };
+      if (!asset) return;
 
       setDocuments((previous) => ({
         ...previous,
-        [documentType]: uploadedFile,
+        [documentType]: {
+          name: asset.name,
+          uri: asset.uri,
+          size: asset.size ?? 0,
+        },
       }));
     } catch (error) {
-      console.log(
-        "Document picker error:",
-        error
-      );
+      console.error("[VehicleRegistration] Document picker error:", error);
 
       Alert.alert(
         "Document Error",
@@ -199,28 +420,14 @@ export default function VehicleRegistrationScreen() {
     }
   };
 
-  /* =======================================================
-     REMOVE DOCUMENT
-  ======================================================= */
-
-  const removeDocument = (
-    documentType: keyof RegistrationDocuments
-  ) => {
+  const removeDocument = (documentType: DocumentKey) => {
     setDocuments((previous) => ({
       ...previous,
       [documentType]: null,
     }));
   };
 
-  /* =======================================================
-     VALIDATION
-  ======================================================= */
-
-  const validateStep = () => {
-    /* -------------------------------------------------------
-       STEP 1 — APPLICANT DETAILS
-    ------------------------------------------------------- */
-
+  const validateStep = (): boolean => {
     if (step === 1) {
       if (
         !form.idNumber.trim() ||
@@ -232,43 +439,27 @@ export default function VehicleRegistrationScreen() {
           "Incomplete Application",
           "Please complete all applicant details before continuing."
         );
-
         return false;
       }
 
-      if (
-        !/^\d{13}$/.test(
-          form.idNumber.trim()
-        )
-      ) {
+      if (!/^\d{13}$/.test(form.idNumber.trim())) {
         Alert.alert(
           "Invalid Identity Number",
           "Please enter a valid 13-digit South African identity number."
         );
-
         return false;
       }
 
-      const cleanPhone =
-        form.phone.replace(/\s/g, "");
-
-      if (
-        !/^0\d{9}$/.test(cleanPhone)
-      ) {
+      if (!/^0\d{9}$/.test(form.phone.replace(/\s/g, ""))) {
         Alert.alert(
           "Invalid Contact Number",
           "Please enter a valid South African mobile number."
         );
-
         return false;
       }
 
       return true;
     }
-
-    /* -------------------------------------------------------
-       STEP 2 — VEHICLE DETAILS
-    ------------------------------------------------------- */
 
     if (step === 2) {
       if (
@@ -284,15 +475,11 @@ export default function VehicleRegistrationScreen() {
           "Incomplete Vehicle Information",
           "Please complete all required vehicle details."
         );
-
         return false;
       }
 
-      const year =
-        Number(form.year);
-
-      const currentYear =
-        new Date().getFullYear();
+      const year = Number(form.year);
+      const currentYear = new Date().getFullYear();
 
       if (
         !/^\d{4}$/.test(form.year) ||
@@ -303,7 +490,6 @@ export default function VehicleRegistrationScreen() {
           "Invalid Vehicle Year",
           "Please enter a valid vehicle manufacturing year."
         );
-
         return false;
       }
 
@@ -312,1154 +498,1040 @@ export default function VehicleRegistrationScreen() {
           "Invalid VIN / Chassis Number",
           "Please enter the vehicle identification or chassis number."
         );
-
         return false;
       }
 
       return true;
     }
 
-    /* -------------------------------------------------------
-       STEP 3 — DOCUMENTS
-    ------------------------------------------------------- */
-
     if (step === 3) {
-      const missingDocuments =
-        !documents.idCopy ||
-        !documents.proofOfResidence ||
-        !documents.proofOfOwnership ||
-        !documents.policeClearance ||
-        !documents.roadworthy;
+      const missingDocuments = DOCUMENT_KEYS.some((key) => !hasDocument(key));
 
       if (missingDocuments) {
         Alert.alert(
           "Required Documents Missing",
-          "Please upload all documents required for this application."
+          "Please upload all five required documents before submitting."
         );
-
         return false;
       }
-
-      return true;
     }
 
     return true;
   };
 
-  /* =======================================================
-     NEXT
-  ======================================================= */
+  const handleBack = () => {
+    if (submitting) return;
+
+    if (step > 1) {
+      setStep((previous) => previous - 1);
+    } else if (resubmitMode) {
+      cancelResubmit();
+    } else {
+      navigation.goBack();
+    }
+  };
 
   const handleNext = () => {
-    if (!validateStep()) {
-      return;
-    }
+    if (submitting || !validateStep()) return;
 
     if (step < 3) {
-      setStep(
-        (previous) => previous + 1
-      );
-
+      setStep((previous) => previous + 1);
       return;
     }
 
-    handleReview();
-  };
-
-  /* =======================================================
-     PREVIOUS
-  ======================================================= */
-
-  const handleBack = () => {
-    if (step > 1) {
-      setStep(
-        (previous) => previous - 1
-      );
-
-      return;
-    }
-
-    navigation.goBack();
-  };
-
-  /* =======================================================
-     REVIEW APPLICATION
-  ======================================================= */
-
-  const handleReview = () => {
     Alert.alert(
-      "Confirm Application",
-      "Please confirm that the information and supporting documents provided are accurate before submitting this application.",
+      resubmitMode ? "Confirm Resubmission" : "Confirm Application",
+      "Please confirm that your information and supporting documents are accurate.",
       [
+        { text: "Review Again", style: "cancel" },
         {
-          text: "Review Again",
-          style: "cancel",
-        },
-        {
-          text: "Submit Application",
+          text: resubmitMode ? "Resubmit Application" : "Submit Application",
           onPress: handleSubmit,
         },
       ]
     );
   };
 
-  /* =======================================================
-     SUBMIT
-  ======================================================= */
-
   const handleSubmit = async () => {
-    if (!validateStep()) {
+    if (authLoading) {
+      Alert.alert(
+        "Please Wait",
+        "Your citizen profile is still loading. Please try again."
+      );
+      return;
+    }
+
+    if (!user?.id || !isLoggedIn) {
+      Alert.alert(
+        "Sign-In Required",
+        "Please sign in again before submitting your application."
+      );
+      return;
+    }
+
+    if (step !== 3 || !validateStep()) return;
+
+    if (DOCUMENT_KEYS.some((key) => !hasDocument(key))) {
+      Alert.alert(
+        "Required Documents Missing",
+        "Please attach all required documents."
+      );
       return;
     }
 
     try {
       setSubmitting(true);
 
-      /*
-       * FIREBASE INTEGRATION
-       *
-       * This is the point where your real backend
-       * submission should be connected.
-       *
-       * Recommended process:
-       *
-       * 1. Generate application ID.
-       * 2. Upload documents to Firebase Storage.
-       * 3. Create Firestore application document.
-       * 4. Store applicant information.
-       * 5. Store vehicle information.
-       * 6. Store document URLs.
-       * 7. Set status = "Submitted".
-       * 8. Store createdAt.
-       * 9. Store applicant/userId.
-       *
-       * Example:
-       *
-       * vehicleApplications/{applicationId}
-       *
-       * {
-       *   applicationId,
-       *   userId,
-       *   status: "Submitted",
-       *   applicant: {...},
-       *   vehicle: {...},
-       *   documents: {...},
-       *   createdAt,
-       * }
-       */
+      const applicationRef = doc(collection(db, "vehicleApplications"));
 
-      await new Promise(
-        (resolve) =>
-          setTimeout(resolve, 1000)
-      );
+      const applicationId = `VR-${applicationRef.id
+        .slice(0, 8)
+        .toUpperCase()}`;
 
-      const applicationId =
-        `VR-${Date.now()}`;
+      console.log("[VehicleRegistration] Starting:", applicationId);
 
-      setSubmitting(false);
+      // Upload newly picked documents to Cloudinary. When resubmitting,
+      // documents that were not replaced reuse the saved reference.
+      const resolveDocument = async (key: DocumentKey) => {
+        const file = documents[key];
 
-      Alert.alert(
-        "Application Submitted",
-        `Your vehicle registration application has been successfully submitted.\n\nApplication Reference:\n${applicationId}\n\nYou can track the progress of this application from Application History.`,
-        [
-          {
-            text: "View Application History",
-            onPress: () =>
-              navigation.navigate(
-                "ApplicationHistory"
-              ),
-          },
-        ]
-      );
+        if (file) {
+          const uploaded = await uploadDocumentToCloudinary(
+            file,
+            applicationRef.id
+          );
+          return { ...uploaded, fileName: file.name };
+        }
+
+        return existingDocuments[key];
+      };
+
+      const [
+        idCopy,
+        proofOfResidence,
+        proofOfOwnership,
+        policeClearance,
+        roadworthy,
+      ] = await Promise.all(DOCUMENT_KEYS.map(resolveDocument));
+
+      const applicant = {
+        idNumber: form.idNumber.trim(),
+        fullName: form.fullName.trim(),
+        phone: form.phone.replace(/\s/g, ""),
+        address: form.address.trim(),
+      };
+
+      await setDoc(applicationRef, {
+        applicationId,
+
+        // Keep these identifiers consistent with Application History.
+        userId: user.id,
+        citizenId: user.id,
+        createdBy: user.id,
+
+        status: "Submitted",
+        rejectionReason: "",
+
+        // Links a resubmission back to the rejected application.
+        ...(resubmitMode && submittedApplicationId
+          ? { resubmissionOf: submittedApplicationId }
+          : {}),
+
+        applicant,
+
+        vehicle: {
+          vehicleType: form.vehicleType,
+          vin: form.vin.trim(),
+          engineNumber: form.engineNumber.trim(),
+          make: form.make.trim(),
+          model: form.model.trim(),
+          year: Number(form.year),
+          colour: form.colour.trim(),
+        },
+
+        documents: {
+          idCopy,
+          proofOfResidence,
+          proofOfOwnership,
+          policeClearance,
+          roadworthy,
+        },
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      console.log("[VehicleRegistration] Firestore saved:", applicationRef.id);
+
+      // The Firestore listener will also receive this application.
+      setSubmittedApplicationId(applicationId);
+      setSubmittedApplicationStatus("Submitted");
+      setSubmittedApplicationRejectionReason("");
+
+      setResubmitMode(false);
+      setExistingDocuments({});
+      setDocuments(INITIAL_DOCUMENTS);
+      setStep(1);
     } catch (error) {
-      setSubmitting(false);
-
-      console.log(
-        "Vehicle registration submission error:",
-        error
-      );
+      console.error("[VehicleRegistration] Submission failed:", error);
 
       Alert.alert(
         "Submission Unsuccessful",
-        "We could not submit your application at this time. Please check your connection and try again."
+        error instanceof Error
+          ? error.message
+          : "We could not upload your documents or save your application. Please try again."
       );
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  /* =======================================================
-     STEP TITLE
-  ======================================================= */
+  const stepTitle =
+    step === 1
+      ? "Applicant Details"
+      : step === 2
+        ? "Vehicle Details"
+        : "Supporting Documents";
 
-  const getStepTitle = () => {
-    switch (step) {
-      case 1:
-        return "Applicant Details";
+  const normalizedStatus = normalizeStatus(submittedApplicationStatus);
+  const applicationApproved = normalizedStatus === "Approved";
+  const applicationRejected = normalizedStatus === "Rejected";
+  const applicationPending = !applicationApproved && !applicationRejected;
 
-      case 2:
-        return "Vehicle Details";
+  const applicationStatusLabel = applicationApproved
+    ? "Approved"
+    : applicationRejected
+      ? "Rejected"
+      : normalizedStatus === "Pending" || normalizedStatus === "Submitted"
+        ? "Awaiting Verification"
+        : normalizedStatus;
 
-      case 3:
-        return "Supporting Documents";
+  const statusColor = applicationApproved
+    ? COLORS.success
+    : applicationRejected
+      ? COLORS.error
+      : COLORS.warning;
 
-      default:
-        return "Vehicle Registration";
+  const statusBackground = applicationApproved
+    ? COLORS.softGreen
+    : applicationRejected
+      ? COLORS.softRed
+      : COLORS.softYellow;
+
+  const statusBorder = applicationApproved
+    ? "#B7E4C7"
+    : applicationRejected
+      ? "#FECDCA"
+      : "#F0D9A4";
+
+  const rejectionReasonText =
+    submittedApplicationRejectionReason ||
+    "No rejection reason has been provided yet. Please contact the administration for more information.";
+
+  const renderInput = (
+    label: string,
+    field: keyof RegistrationForm,
+    placeholder: string,
+    options?: {
+      keyboardType?: "default" | "numeric" | "phone-pad";
+      multiline?: boolean;
+      maxLength?: number;
+      autoCapitalize?: "none" | "sentences" | "words" | "characters";
     }
-  };
-
-  /* =======================================================
-     DOCUMENT UPLOAD
-  ======================================================= */
+  ) => (
+    <View style={styles.inputGroup}>
+      <Text style={styles.label}>{label} *</Text>
+      <TextInput
+        style={[
+          styles.input,
+          options?.multiline && styles.multilineInput,
+        ]}
+        placeholder={placeholder}
+        placeholderTextColor={COLORS.textLight}
+        value={form[field]}
+        keyboardType={options?.keyboardType ?? "default"}
+        multiline={options?.multiline}
+        textAlignVertical={options?.multiline ? "top" : "center"}
+        maxLength={options?.maxLength}
+        autoCapitalize={options?.autoCapitalize ?? "sentences"}
+        onChangeText={(value) => {
+          if (field === "idNumber" || field === "year") {
+            updateForm(field, value.replace(/\D/g, ""));
+          } else if (field === "vin" || field === "engineNumber") {
+            updateForm(field, value.toUpperCase());
+          } else {
+            updateForm(field, value);
+          }
+        }}
+      />
+    </View>
+  );
 
   const renderDocumentUpload = (
     label: string,
-    documentType: keyof RegistrationDocuments,
+    documentType: DocumentKey,
     description: string
   ) => {
-    const file =
-      documents[documentType];
+    const file = documents[documentType];
+    const savedFile =
+      resubmitMode && !file ? existingDocuments[documentType] : null;
 
     return (
-      <View
-        style={styles.documentGroup}
-      >
-        <View style={styles.documentHeader}>
-          <View style={{ flex: 1 }}>
-            <Text
-              style={styles.documentLabel}
-            >
-              {label}
-            </Text>
+      <View style={styles.documentGroup} key={documentType}>
+        <Text style={styles.documentLabel}>{label} *</Text>
+        <Text style={styles.documentDescription}>{description}</Text>
 
-            <Text
-              style={
-                styles.documentDescription
-              }
+        {file ? (
+          <View style={styles.filePreview}>
+            <Ionicons
+              name="checkmark-circle"
+              size={25}
+              color={COLORS.success}
+            />
+            <View style={styles.fileInformation}>
+              <Text style={styles.fileName} numberOfLines={1}>
+                {file.name}
+              </Text>
+              <Text style={styles.fileStatus}>
+                {resubmitMode ? "New document attached" : "Document attached"}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => removeDocument(documentType)}
+              style={styles.removeButton}
+              accessibilityLabel={`Remove ${label}`}
             >
-              {description}
-            </Text>
+              <Ionicons name="trash-outline" size={20} color={COLORS.error} />
+            </TouchableOpacity>
           </View>
-
-          <Text
-            style={styles.requiredBadge}
-          >
-            REQUIRED
-          </Text>
-        </View>
-
-        {!file ? (
+        ) : savedFile ? (
+          <View style={styles.savedFilePreview}>
+            <Ionicons
+              name="document-text-outline"
+              size={24}
+              color={COLORS.primary}
+            />
+            <View style={styles.fileInformation}>
+              <Text style={styles.fileName} numberOfLines={1}>
+                {savedFile.fileName || "Previously uploaded document"}
+              </Text>
+              <Text style={styles.savedFileStatus}>
+                On file from your previous application
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => pickDocument(documentType)}
+              style={styles.replaceButton}
+              accessibilityLabel={`Replace ${label}`}
+            >
+              <Text style={styles.replaceButtonText}>Replace</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
           <TouchableOpacity
             style={styles.uploadBox}
+            onPress={() => pickDocument(documentType)}
             activeOpacity={0.8}
-            onPress={() =>
-              pickDocument(
-                documentType
-              )
-            }
           >
-            <View
-              style={styles.uploadIcon}
-            >
-              <Ionicons
-                name="document-attach-outline"
-                size={23}
-                color={
-                  COLORS.primary
-                }
-              />
+            <Ionicons
+              name="document-attach-outline"
+              size={25}
+              color={COLORS.primary}
+            />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.uploadTitle}>Select document</Text>
+              <Text style={styles.uploadHint}>PDF, JPG or PNG</Text>
             </View>
-
-            <View
-              style={{
-                flex: 1,
-                marginLeft: 12,
-              }}
-            >
-              <Text
-                style={styles.uploadTitle}
-              >
-                Select document
-              </Text>
-
-              <Text
-                style={styles.uploadHint}
-              >
-                PDF, JPG or PNG
-              </Text>
-            </View>
-
             <Ionicons
               name="chevron-forward"
               size={19}
-              color={
-                COLORS.textLight
-              }
+              color={COLORS.textLight}
             />
           </TouchableOpacity>
-        ) : (
-          <View
-            style={styles.filePreview}
-          >
-            <View
-              style={styles.fileIcon}
-            >
-              <Ionicons
-                name="checkmark"
-                size={20}
-                color={
-                  COLORS.success
-                }
-              />
-            </View>
-
-            <View
-              style={
-                styles.fileInformation
-              }
-            >
-              <Text
-                style={styles.fileName}
-                numberOfLines={1}
-              >
-                {file.name}
-              </Text>
-
-              <Text
-                style={
-                  styles.fileStatus
-                }
-              >
-                Document attached
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              onPress={() =>
-                removeDocument(
-                  documentType
-                )
-              }
-              style={
-                styles.removeButton
-              }
-            >
-              <Ionicons
-                name="trash-outline"
-                size={19}
-                color={
-                  COLORS.error
-                }
-              />
-            </TouchableOpacity>
-          </View>
         )}
       </View>
     );
   };
 
-  /* =======================================================
-     SUMMARY ROW
-  ======================================================= */
+  if (authLoading || checkingExistingApplication) {
+    return (
+      <SafeAreaView style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.loadingTitle}>
+          Checking your vehicle registration...
+        </Text>
+        <Text style={styles.loadingDescription}>
+          Retrieving your saved application and its latest status.
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
-  const SummaryRow = ({
-    label,
-    value,
-  }: {
-    label: string;
-    value: string;
-  }) => (
-    <View style={styles.summaryRow}>
-      <Text style={styles.summaryLabel}>
-        {label}
-      </Text>
+  // Status screen: one layout per state (Pending / Approved / Rejected).
+  if (submittedApplicationId && !resubmitMode) {
+    const savedApplicant = latestApplication?.applicant ?? {};
+    const savedVehicle = latestApplication?.vehicle ?? {};
 
-      <Text style={styles.summaryValue}>
-        {value}
-      </Text>
-    </View>
-  );
+    const vehicleLabel =
+      savedVehicle.make && savedVehicle.model
+        ? `${savedVehicle.make} ${savedVehicle.model}${
+            savedVehicle.year ? ` (${savedVehicle.year})` : ""
+          }`
+        : "Not available";
 
-  /* =======================================================
-     RENDER
-  ======================================================= */
+    const heroTitle = applicationApproved
+      ? "Application Approved"
+      : applicationRejected
+        ? "Application Rejected"
+        : "Application Submitted";
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      {/* =================================================
-          HEADER
-      ================================================= */}
+    const heroDescription = applicationApproved
+      ? "Your vehicle registration has been approved."
+      : applicationRejected
+        ? "Your application needs changes before it can be approved."
+        : "Your application is waiting for administrative review.";
 
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View
-            style={styles.departmentMark}
-          >
-            <Ionicons
-              name="car-outline"
-              size={22}
-              color="#FFFFFF"
+    const heroIcon = applicationApproved
+      ? "checkmark-circle"
+      : applicationRejected
+        ? "close-circle"
+        : "time";
+
+    // Progress tracker: Submitted -> Under Review -> Decision.
+    const trackerSteps = [
+      { label: "Submitted", done: true, active: false },
+      { label: "Under Review", done: !applicationPending, active: applicationPending },
+      { label: "Decision", done: !applicationPending, active: false },
+    ];
+
+    return (
+      <SafeAreaView style={styles.safe}>
+        <ScrollView
+          contentContainerStyle={styles.confirmationContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* 1. Status hero */}
+          <View style={styles.confirmationCard}>
+            <View
+              style={[
+                styles.confirmationIcon,
+                { backgroundColor: statusBackground },
+              ]}
+            >
+              <Ionicons name={heroIcon as any} size={54} color={statusColor} />
+            </View>
+
+            <Text style={styles.confirmationEyebrow}>
+              VEHICLE REGISTRATION
+            </Text>
+            <Text style={styles.confirmationTitle}>{heroTitle}</Text>
+            <Text style={styles.confirmationDescription}>
+              {heroDescription}
+            </Text>
+
+            <View
+              style={[
+                styles.statusBadge,
+                {
+                  backgroundColor: statusBackground,
+                  borderColor: statusBorder,
+                },
+              ]}
+            >
+              <Ionicons
+                name={
+                  applicationApproved
+                    ? "checkmark-circle-outline"
+                    : applicationRejected
+                      ? "close-circle-outline"
+                      : "time-outline"
+                }
+                size={18}
+                color={statusColor}
+              />
+              <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+                {applicationStatusLabel}
+              </Text>
+            </View>
+
+            {/* Progress tracker */}
+            <View style={styles.tracker}>
+              {trackerSteps.map((item, index) => (
+                <React.Fragment key={item.label}>
+                  <View style={styles.trackerStep}>
+                    <View
+                      style={[
+                        styles.trackerDot,
+                        item.done && {
+                          backgroundColor:
+                            index === 2 ? statusColor : COLORS.primary,
+                        },
+                        item.active && {
+                          backgroundColor: COLORS.warning,
+                        },
+                      ]}
+                    >
+                      {item.done && (
+                        <Ionicons
+                          name={
+                            index === 2 && applicationRejected
+                              ? "close"
+                              : "checkmark"
+                          }
+                          size={13}
+                          color="#FFFFFF"
+                        />
+                      )}
+                      {item.active && (
+                        <View style={styles.trackerDotInner} />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.trackerLabel,
+                        (item.done || item.active) && styles.trackerLabelOn,
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                  </View>
+                  {index < trackerSteps.length - 1 && (
+                    <View
+                      style={[
+                        styles.trackerLine,
+                        trackerSteps[index + 1].done && {
+                          backgroundColor: COLORS.primary,
+                        },
+                      ]}
+                    />
+                  )}
+                </React.Fragment>
+              ))}
+            </View>
+          </View>
+
+          {/* 2. Rejection reason: the hero of the rejected state */}
+          {applicationRejected && (
+            <View style={styles.rejectionPanel}>
+              <View style={styles.rejectionHeader}>
+                <Ionicons
+                  name="alert-circle"
+                  size={21}
+                  color={COLORS.error}
+                />
+                <Text style={styles.rejectionTitle}>
+                  Reason for rejection
+                </Text>
+              </View>
+              <Text style={styles.rejectionDescription}>
+                {rejectionReasonText}
+              </Text>
+            </View>
+          )}
+
+          {/* 3. Application summary */}
+          <View style={[styles.card, styles.statusSummaryCard]}>
+            <View style={styles.summaryHeader}>
+              <Ionicons
+                name="clipboard-outline"
+                size={20}
+                color={COLORS.primary}
+              />
+              <Text style={styles.summaryTitle}>Application Details</Text>
+            </View>
+
+            <SummaryRow label="Reference" value={submittedApplicationId} />
+            <SummaryRow
+              label="Applicant"
+              value={
+                savedApplicant.fullName ||
+                user?.fullName ||
+                form.fullName ||
+                "Not available"
+              }
+            />
+            <SummaryRow label="Vehicle" value={vehicleLabel} />
+            <SummaryRow
+              label="Vehicle Type"
+              value={savedVehicle.vehicleType || "Not available"}
             />
           </View>
 
-          <View
-            style={{
-              flex: 1,
-              marginLeft: 10,
-            }}
-          >
-            <Text
-              style={styles.departmentTitle}
-            >
-              VEHICLE REGISTRATION
+          {/* 4. What happens next */}
+          <View style={[styles.card, styles.nextCard]}>
+            <Text style={styles.nextStepsTitle}>
+              {applicationApproved
+                ? "What happens next"
+                : applicationRejected
+                  ? "What you can do"
+                  : "What to expect"}
             </Text>
 
-            <Text
-              style={
-                styles.departmentSubtitle
-              }
+            {applicationPending && (
+              <>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="sync-outline"
+                    size={19}
+                    color={COLORS.primary}
+                  />
+                  <Text style={styles.nextStepText}>
+                    This screen updates automatically when an administrator
+                    makes a decision.
+                  </Text>
+                </View>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="bookmark-outline"
+                    size={19}
+                    color={COLORS.primary}
+                  />
+                  <Text style={styles.nextStepText}>
+                    Keep your reference number for any enquiries.
+                  </Text>
+                </View>
+              </>
+            )}
+
+            {applicationApproved && (
+              <>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="shield-checkmark-outline"
+                    size={19}
+                    color={COLORS.success}
+                  />
+                  <Text style={styles.nextStepText}>
+                    Your details and documents were verified. No further
+                    action is required on this application.
+                  </Text>
+                </View>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="folder-open-outline"
+                    size={19}
+                    color={COLORS.primary}
+                  />
+                  <Text style={styles.nextStepText}>
+                    Keep your reference number and review your application in
+                    Application History.
+                  </Text>
+                </View>
+              </>
+            )}
+
+            {applicationRejected && (
+              <>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="create-outline"
+                    size={19}
+                    color={COLORS.primary}
+                  />
+                  <Text style={styles.nextStepText}>
+                    Tap Fix & Resubmit. Your details are filled in already, so
+                    only change what the reason above points to.
+                  </Text>
+                </View>
+                <View style={styles.nextStepRow}>
+                  <Ionicons
+                    name="documents-outline"
+                    size={19}
+                    color={COLORS.primary}
+                  />
+                  <Text style={styles.nextStepText}>
+                    Replace only the documents that need correcting. The rest
+                    stay on file.
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+
+          {/* 5. Actions */}
+          {applicationRejected ? (
+            <TouchableOpacity
+              style={styles.confirmationPrimaryButton}
+              activeOpacity={0.85}
+              onPress={startResubmit}
             >
-              Citizen Services
+              <Ionicons name="refresh-outline" size={19} color="#FFFFFF" />
+              <Text style={styles.confirmationPrimaryButtonText}>
+                Fix & Resubmit
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.confirmationPrimaryButton}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate("ApplicationHistory")}
+            >
+              <Ionicons name="folder-open-outline" size={19} color="#FFFFFF" />
+              <Text style={styles.confirmationPrimaryButtonText}>
+                View Application History
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {applicationRejected && (
+            <TouchableOpacity
+              style={styles.outlineButton}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate("ApplicationHistory")}
+            >
+              <Text style={styles.outlineButtonText}>
+                View Application History
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.confirmationSecondaryButton}
+            activeOpacity={0.85}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.confirmationSecondaryButtonText}>
+              Return to Previous Screen
             </Text>
+          </TouchableOpacity>
+
+          <View style={styles.confirmationFooter}>
+            <Ionicons
+              name="lock-closed-outline"
+              size={14}
+              color={COLORS.textLight}
+            />
+            <Text style={styles.confirmationFooterText}>
+              Status shown is the latest saved on your application.
+            </Text>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <View style={styles.headerTop}>
+          <View style={styles.departmentMark}>
+            <Ionicons name="car-outline" size={23} color="#FFFFFF" />
+          </View>
+
+          <View style={{ flex: 1, marginLeft: 11 }}>
+            <Text style={styles.departmentTitle}>VEHICLE REGISTRATION</Text>
+            <Text style={styles.departmentSubtitle}>Citizen Services</Text>
           </View>
         </View>
 
         <Text style={styles.title}>
-          Vehicle Registration Application
+          {resubmitMode
+            ? "Update & Resubmit Application"
+            : "Vehicle Registration Application"}
         </Text>
-
         <Text style={styles.subtitle}>
-          Complete the application below to
-          submit your vehicle registration
-          request.
+          {resubmitMode
+            ? "Review your saved details, correct what was flagged and resubmit."
+            : "Complete the application below to submit your vehicle registration request."}
         </Text>
 
-        {/* PROGRESS */}
-
-        <View
-          style={styles.progressContainer}
-        >
-          {[1, 2, 3].map((item) => {
-            const active =
-              step >= item;
-
-            return (
-              <React.Fragment
-                key={item}
+        <View style={styles.progressContainer}>
+          {[1, 2, 3].map((item) => (
+            <React.Fragment key={item}>
+              <View
+                style={[
+                  styles.progressCircle,
+                  step >= item && styles.progressCircleActive,
+                ]}
               >
+                {item < step ? (
+                  <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.progressNumber,
+                      step >= item && styles.progressNumberActive,
+                    ]}
+                  >
+                    {item}
+                  </Text>
+                )}
+              </View>
+
+              {item < 3 && (
                 <View
                   style={[
-                    styles.progressCircle,
-                    active &&
-                      styles.progressCircleActive,
+                    styles.progressLine,
+                    step > item && styles.progressLineActive,
                   ]}
-                >
-                  {item < step ? (
-                    <Ionicons
-                      name="checkmark"
-                      size={15}
-                      color="#FFFFFF"
-                    />
-                  ) : (
-                    <Text
-                      style={[
-                        styles.progressNumber,
-                        active &&
-                          styles.progressNumberActive,
-                      ]}
-                    >
-                      {item}
-                    </Text>
-                  )}
-                </View>
-
-                {item < 3 && (
-                  <View
-                    style={[
-                      styles.progressLine,
-                      step > item &&
-                        styles.progressLineActive,
-                    ]}
-                  />
-                )}
-              </React.Fragment>
-            );
-          })}
+                />
+              )}
+            </React.Fragment>
+          ))}
         </View>
 
-        <Text
-          style={styles.progressLabel}
-        >
-          Step {step} of 3 •{" "}
-          {getStepTitle()}
+        <Text style={styles.progressLabel}>
+          Step {step} of 3 {" • "} {stepTitle}
         </Text>
       </View>
 
-      {/* =================================================
-          CONTENT
-      ================================================= */}
-
       <ScrollView
-        contentContainerStyle={
-          styles.container
-        }
-        showsVerticalScrollIndicator={
-          false
-        }
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* GOVERNMENT NOTICE */}
-
-        <View
-          style={styles.noticeBox}
-        >
-          <Ionicons
-            name="information-circle-outline"
-            size={21}
-            color={COLORS.primary}
-          />
-
-          <Text
-            style={styles.noticeText}
-          >
-            Please ensure that all information
-            supplied is accurate and that
-            supporting documents are clear and
-            legible. Applications may be subject
-            to verification.
-          </Text>
-        </View>
-
-        {/* =================================================
-            STEP 1
-        ================================================= */}
+        {resubmitMode ? (
+          <View style={styles.reasonBanner}>
+            <View style={styles.rejectionHeader}>
+              <Ionicons name="alert-circle" size={20} color={COLORS.error} />
+              <Text style={styles.rejectionTitle}>
+                Fix this before resubmitting
+              </Text>
+            </View>
+            <Text style={styles.rejectionDescription}>
+              {rejectionReasonText}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.noticeBox}>
+            <Ionicons
+              name="information-circle-outline"
+              size={22}
+              color={COLORS.primary}
+            />
+            <Text style={styles.noticeText}>
+              Please ensure that all information supplied is accurate and that
+              supporting documents are clear and legible. Applications may be
+              subject to verification.
+            </Text>
+          </View>
+        )}
 
         {step === 1 && (
           <View style={styles.card}>
-            <View
-              style={styles.sectionHeading}
-            >
-              <View
-                style={
-                  styles.sectionNumber
-                }
-              >
-                <Text
-                  style={
-                    styles.sectionNumberText
-                  }
-                >
-                  A
-                </Text>
+            <View style={styles.sectionHeading}>
+              <View style={styles.sectionNumber}>
+                <Text style={styles.sectionNumberText}>A</Text>
               </View>
-
-              <View>
-                <Text
-                  style={styles.sectionHeader}
-                >
-                  Applicant Details
-                </Text>
-
-                <Text
-                  style={
-                    styles.sectionDescription
-                  }
-                >
-                  Details of the registered
-                  owner or applicant.
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionHeader}>Applicant Details</Text>
+                <Text style={styles.sectionDescription}>
+                  Details of the registered owner or applicant.
                 </Text>
               </View>
             </View>
 
-            <View
-              style={styles.divider}
-            />
+            <View style={styles.divider} />
 
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                South African ID Number *
-              </Text>
+            {renderInput(
+              "South African ID Number",
+              "idNumber",
+              "Enter 13-digit ID number",
+              { keyboardType: "numeric", maxLength: 13 }
+            )}
 
-              <TextInput
-                style={styles.input}
-                placeholder="Enter 13-digit ID number"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
-                keyboardType="numeric"
-                maxLength={13}
-                value={form.idNumber}
-                onChangeText={(value) =>
-                  updateForm(
-                    "idNumber",
-                    value.replace(
-                      /\D/g,
-                      ""
-                    )
-                  )
-                }
-              />
-            </View>
+            {renderInput(
+              "Full Names and Surname",
+              "fullName",
+              "As reflected on identity document"
+            )}
 
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                Full Names and Surname *
-              </Text>
+            {renderInput("Contact Number", "phone", "e.g. 082 123 4567", {
+              keyboardType: "phone-pad",
+            })}
 
-              <TextInput
-                style={styles.input}
-                placeholder="As reflected on identity document"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
-                value={form.fullName}
-                onChangeText={(value) =>
-                  updateForm(
-                    "fullName",
-                    value
-                  )
-                }
-              />
-            </View>
-
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                Contact Number *
-              </Text>
-
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. 082 123 4567"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
-                keyboardType="phone-pad"
-                value={form.phone}
-                onChangeText={(value) =>
-                  updateForm(
-                    "phone",
-                    value
-                  )
-                }
-              />
-            </View>
-
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                Residential Address *
-              </Text>
-
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.multilineInput,
-                ]}
-                placeholder="Street, suburb, city and postal code"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
-                multiline
-                textAlignVertical="top"
-                value={form.address}
-                onChangeText={(value) =>
-                  updateForm(
-                    "address",
-                    value
-                  )
-                }
-              />
-            </View>
+            {renderInput(
+              "Residential Address",
+              "address",
+              "Street, suburb, city and postal code",
+              { multiline: true }
+            )}
           </View>
         )}
-
-        {/* =================================================
-            STEP 2
-        ================================================= */}
 
         {step === 2 && (
           <View style={styles.card}>
-            <View
-              style={styles.sectionHeading}
-            >
-              <View
-                style={
-                  styles.sectionNumber
-                }
-              >
-                <Text
-                  style={
-                    styles.sectionNumberText
-                  }
-                >
-                  B
-                </Text>
+            <View style={styles.sectionHeading}>
+              <View style={styles.sectionNumber}>
+                <Text style={styles.sectionNumberText}>B</Text>
               </View>
-
-              <View>
-                <Text
-                  style={styles.sectionHeader}
-                >
-                  Vehicle Details
-                </Text>
-
-                <Text
-                  style={
-                    styles.sectionDescription
-                  }
-                >
-                  Provide the identifying
-                  information for the vehicle.
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionHeader}>Vehicle Details</Text>
+                <Text style={styles.sectionDescription}>
+                  Provide identifying information for the vehicle.
                 </Text>
               </View>
             </View>
 
-            <View
-              style={styles.divider}
-            />
+            <View style={styles.divider} />
 
-            <Text
-              style={styles.label}
-            >
-              Vehicle Classification *
-            </Text>
+            <Text style={styles.label}>Vehicle Classification *</Text>
 
-            <View
-              style={styles.vehicleTypes}
-            >
-              {VEHICLE_TYPES.map(
-                (vehicle) => {
-                  const selected =
-                    form.vehicleType ===
-                    vehicle.name;
+            <View style={styles.vehicleTypes}>
+              {VEHICLE_TYPES.map((vehicle) => {
+                const selected = form.vehicleType === vehicle.name;
 
-                  return (
-                    <TouchableOpacity
-                      key={vehicle.id}
-                      style={[
-                        styles.optionCard,
-                        selected &&
-                          styles.optionCardActive,
-                      ]}
-                      activeOpacity={0.8}
-                      onPress={() =>
-                        updateForm(
-                          "vehicleType",
-                          vehicle.name
-                        )
-                      }
+                return (
+                  <TouchableOpacity
+                    key={vehicle.id}
+                    style={[
+                      styles.optionCard,
+                      selected && styles.optionCardActive,
+                    ]}
+                    activeOpacity={0.8}
+                    onPress={() => updateForm("vehicleType", vehicle.name)}
+                  >
+                    <View
+                      style={[styles.radio, selected && styles.radioActive]}
                     >
-                      <View
-                        style={[
-                          styles.radio,
-                          selected &&
-                            styles.radioActive,
-                        ]}
-                      >
-                        {selected && (
-                          <View
-                            style={
-                              styles.radioInner
-                            }
-                          />
-                        )}
-                      </View>
+                      {selected && <View style={styles.radioInner} />}
+                    </View>
 
-                      <View
-                        style={
-                          styles.optionInformation
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.optionTitle
-                          }
-                        >
-                          {vehicle.name}
-                        </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.optionTitle}>{vehicle.name}</Text>
+                      <Text style={styles.optionDescription}>
+                        {vehicle.description}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-                        <Text
-                          style={
-                            styles.optionDescription
-                          }
-                        >
-                          {
-                            vehicle.description
-                          }
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                }
+            {renderInput(
+              "VIN / Chassis Number",
+              "vin",
+              "Enter VIN or chassis number",
+              { autoCapitalize: "characters" }
+            )}
+
+            {renderInput("Engine Number", "engineNumber", "Enter engine number", {
+              autoCapitalize: "characters",
+            })}
+
+            <View style={styles.twoColumn}>
+              <View style={styles.column}>
+                {renderInput("Make", "make", "Toyota")}
+              </View>
+              <View style={styles.column}>
+                {renderInput("Model", "model", "Corolla")}
+              </View>
+            </View>
+
+            <View style={styles.twoColumn}>
+              <View style={styles.column}>
+                {renderInput("Year", "year", "2020", {
+                  keyboardType: "numeric",
+                  maxLength: 4,
+                })}
+              </View>
+              <View style={styles.column}>
+                {renderInput("Colour", "colour", "White")}
+              </View>
+            </View>
+          </View>
+        )}
+
+        {step === 3 && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.sectionHeading}>
+                <View style={styles.sectionNumber}>
+                  <Text style={styles.sectionNumberText}>C</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sectionHeader}>Supporting Documents</Text>
+                  <Text style={styles.sectionDescription}>
+                    {resubmitMode
+                      ? "Replace only the documents that need correcting."
+                      : "Attach the supporting documentation for this application."}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.documentNotice}>
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={21}
+                  color={COLORS.primary}
+                />
+                <Text style={styles.documentNoticeText}>
+                  Documents must be clear, complete and readable. Only upload
+                  documents belonging to this application.
+                </Text>
+              </View>
+
+              {renderDocumentUpload(
+                "Identity Document",
+                "idCopy",
+                "Copy of the applicant's identity document."
+              )}
+
+              {renderDocumentUpload(
+                "Proof of Residence",
+                "proofOfResidence",
+                "Recent document confirming the applicant's address."
+              )}
+
+              {renderDocumentUpload(
+                "Proof of Ownership",
+                "proofOfOwnership",
+                "Proof of ownership, purchase or transfer of the vehicle."
+              )}
+
+              {renderDocumentUpload(
+                "Police Clearance Certificate",
+                "policeClearance",
+                "Police clearance documentation where applicable."
+              )}
+
+              {renderDocumentUpload(
+                "Roadworthy Certificate",
+                "roadworthy",
+                "Valid roadworthiness documentation where required."
               )}
             </View>
 
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                VIN / Chassis Number *
-              </Text>
+            <View style={[styles.card, styles.summaryCard]}>
+              <View style={styles.summaryHeader}>
+                <Ionicons
+                  name="clipboard-outline"
+                  size={21}
+                  color={COLORS.primary}
+                />
+                <Text style={styles.summaryTitle}>Application Summary</Text>
+              </View>
 
-              <TextInput
-                style={styles.input}
-                placeholder="Enter VIN or chassis number"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
-                autoCapitalize="characters"
-                value={form.vin}
-                onChangeText={(value) =>
-                  updateForm(
-                    "vin",
-                    value.toUpperCase()
-                  )
-                }
+              <SummaryRow
+                label="Applicant"
+                value={form.fullName || "Not provided"}
               />
-            </View>
 
-            <View
-              style={styles.inputGroup}
-            >
-              <Text
-                style={styles.label}
-              >
-                Engine Number *
-              </Text>
-
-              <TextInput
-                style={styles.input}
-                placeholder="Enter engine number"
-                placeholderTextColor={
-                  COLORS.textLight
-                }
+              <SummaryRow
+                label="Vehicle"
                 value={
-                  form.engineNumber
-                }
-                onChangeText={(value) =>
-                  updateForm(
-                    "engineNumber",
-                    value.toUpperCase()
-                  )
-                }
-              />
-            </View>
-
-            <View
-              style={styles.twoColumn}
-            >
-              <View
-                style={[
-                  styles.inputGroup,
-                  styles.column,
-                ]}
-              >
-                <Text
-                  style={styles.label}
-                >
-                  Make *
-                </Text>
-
-                <TextInput
-                  style={styles.input}
-                  placeholder="Toyota"
-                  placeholderTextColor={
-                    COLORS.textLight
-                  }
-                  value={form.make}
-                  onChangeText={(value) =>
-                    updateForm(
-                      "make",
-                      value
-                    )
-                  }
-                />
-              </View>
-
-              <View
-                style={[
-                  styles.inputGroup,
-                  styles.column,
-                ]}
-              >
-                <Text
-                  style={styles.label}
-                >
-                  Model *
-                </Text>
-
-                <TextInput
-                  style={styles.input}
-                  placeholder="Corolla"
-                  placeholderTextColor={
-                    COLORS.textLight
-                  }
-                  value={form.model}
-                  onChangeText={(value) =>
-                    updateForm(
-                      "model",
-                      value
-                    )
-                  }
-                />
-              </View>
-            </View>
-
-            <View
-              style={styles.twoColumn}
-            >
-              <View
-                style={[
-                  styles.inputGroup,
-                  styles.column,
-                ]}
-              >
-                <Text
-                  style={styles.label}
-                >
-                  Year *
-                </Text>
-
-                <TextInput
-                  style={styles.input}
-                  placeholder="2020"
-                  placeholderTextColor={
-                    COLORS.textLight
-                  }
-                  keyboardType="numeric"
-                  maxLength={4}
-                  value={form.year}
-                  onChangeText={(value) =>
-                    updateForm(
-                      "year",
-                      value.replace(
-                        /\D/g,
-                        ""
-                      )
-                    )
-                  }
-                />
-              </View>
-
-              <View
-                style={[
-                  styles.inputGroup,
-                  styles.column,
-                ]}
-              >
-                <Text
-                  style={styles.label}
-                >
-                  Colour *
-                </Text>
-
-                <TextInput
-                  style={styles.input}
-                  placeholder="White"
-                  placeholderTextColor={
-                    COLORS.textLight
-                  }
-                  value={form.colour}
-                  onChangeText={(value) =>
-                    updateForm(
-                      "colour",
-                      value
-                    )
-                  }
-                />
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* =================================================
-            STEP 3
-        ================================================= */}
-
-        {step === 3 && (
-          <View style={styles.card}>
-            <View
-              style={styles.sectionHeading}
-            >
-              <View
-                style={
-                  styles.sectionNumber
-                }
-              >
-                <Text
-                  style={
-                    styles.sectionNumberText
-                  }
-                >
-                  C
-                </Text>
-              </View>
-
-              <View>
-                <Text
-                  style={styles.sectionHeader}
-                >
-                  Supporting Documents
-                </Text>
-
-                <Text
-                  style={
-                    styles.sectionDescription
-                  }
-                >
-                  Attach the supporting
-                  documentation for this
-                  application.
-                </Text>
-              </View>
-            </View>
-
-            <View
-              style={styles.divider}
-            />
-
-            <View
-              style={styles.documentNotice}
-            >
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={20}
-                color={
-                  COLORS.primary
+                  form.make && form.model
+                    ? `${form.make} ${form.model}`
+                    : "Not provided"
                 }
               />
 
-              <Text
-                style={
-                  styles.documentNoticeText
-                }
-              >
-                Documents must be clear,
-                complete and readable. Only
-                upload documents belonging to
-                this application.
-              </Text>
-            </View>
-
-            {renderDocumentUpload(
-              "Identity Document",
-              "idCopy",
-              "Copy of the applicant's identity document."
-            )}
-
-            {renderDocumentUpload(
-              "Proof of Residence",
-              "proofOfResidence",
-              "Recent document confirming the applicant's residential address."
-            )}
-
-            {renderDocumentUpload(
-              "Proof of Ownership",
-              "proofOfOwnership",
-              "Proof of ownership, purchase or transfer of the vehicle."
-            )}
-
-            {renderDocumentUpload(
-              "Police Clearance Certificate",
-              "policeClearance",
-              "Police clearance documentation where applicable."
-            )}
-
-            {renderDocumentUpload(
-              "Roadworthy Certificate",
-              "roadworthy",
-              "Valid roadworthiness documentation where required."
-            )}
-          </View>
-        )}
-
-        {/* =================================================
-            APPLICATION SUMMARY
-        ================================================= */}
-
-        {step === 3 && (
-          <View
-            style={[
-              styles.card,
-              styles.summaryCard,
-            ]}
-          >
-            <View
-              style={styles.summaryHeader}
-            >
-              <Ionicons
-                name="clipboard-outline"
-                size={20}
-                color={
-                  COLORS.primary
-                }
+              <SummaryRow
+                label="Vehicle Type"
+                value={form.vehicleType || "Not selected"}
               />
 
-              <Text
-                style={styles.summaryTitle}
-              >
-                Application Summary
-              </Text>
+              <SummaryRow
+                label="Vehicle Year"
+                value={form.year || "Not provided"}
+              />
             </View>
-
-            <SummaryRow
-              label="Applicant"
-              value={
-                form.fullName ||
-                "Not provided"
-              }
-            />
-
-            <SummaryRow
-              label="Vehicle"
-              value={
-                form.make &&
-                form.model
-                  ? `${form.make} ${form.model}`
-                  : "Not provided"
-              }
-            />
-
-            <SummaryRow
-              label="Vehicle Type"
-              value={
-                form.vehicleType ||
-                "Not selected"
-              }
-            />
-
-            <SummaryRow
-              label="Vehicle Year"
-              value={
-                form.year ||
-                "Not provided"
-              }
-            />
-          </View>
+          </>
         )}
 
-        {/* =================================================
-            ACTION BUTTONS
-        ================================================= */}
-
-        <View
-          style={styles.buttonRow}
-        >
+        <View style={styles.buttonRow}>
           <TouchableOpacity
             style={styles.secondaryButton}
             activeOpacity={0.8}
@@ -1467,84 +1539,53 @@ export default function VehicleRegistrationScreen() {
             disabled={submitting}
           >
             <Ionicons
-              name={
-                step === 1
-                  ? "close-outline"
-                  : "arrow-back-outline"
-              }
-              size={18}
+              name={step === 1 ? "close-outline" : "arrow-back-outline"}
+              size={19}
               color={COLORS.text}
             />
-
-            <Text
-              style={
-                styles.secondaryButtonText
-              }
-            >
-              {step === 1
-                ? "Cancel"
-                : "Previous"}
+            <Text style={styles.secondaryButtonText}>
+              {step === 1 ? "Cancel" : "Previous"}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[
               styles.primaryButton,
-              submitting &&
-                styles.primaryButtonDisabled,
+              submitting && styles.primaryButtonDisabled,
             ]}
             activeOpacity={0.8}
             disabled={submitting}
             onPress={handleNext}
           >
-            <Text
-              style={
-                styles.primaryButtonText
-              }
-            >
-              {submitting
-                ? "Submitting..."
-                : step === 3
-                ? "Submit Application"
-                : "Continue"}
-            </Text>
-
-            {!submitting && (
-              <Ionicons
-                name={
-                  step === 3
-                    ? "checkmark"
-                    : "arrow-forward"
-                }
-                size={18}
-                color="#FFFFFF"
-              />
+            {submitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Text style={styles.primaryButtonText}>
+                  {step === 3
+                    ? resubmitMode
+                      ? "Resubmit Application"
+                      : "Submit Application"
+                    : "Continue"}
+                </Text>
+                <Ionicons
+                  name={step === 3 ? "checkmark" : "arrow-forward"}
+                  size={19}
+                  color="#FFFFFF"
+                />
+              </>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* =================================================
-            FOOTER
-        ================================================= */}
-
-        <View
-          style={styles.footer}
-        >
+        <View style={styles.footer}>
           <Ionicons
             name="lock-closed-outline"
             size={15}
-            color={
-              COLORS.textLight
-            }
+            color={COLORS.textLight}
           />
-
-          <Text
-            style={styles.footerText}
-          >
-            Information provided through this
-            application should be accurate and
-            complete. Submission does not
-            constitute final registration approval.
+          <Text style={styles.footerText}>
+            Submission does not constitute final registration approval.
           </Text>
         </View>
       </ScrollView>
@@ -1552,20 +1593,31 @@ export default function VehicleRegistrationScreen() {
   );
 }
 
-/* =========================================================
-   STYLES
-========================================================= */
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
-
-  /* =======================================================
-     HEADER
-  ======================================================= */
-
+  loadingScreen: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  loadingTitle: {
+    marginTop: 14,
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  loadingDescription: {
+    marginTop: 7,
+    color: COLORS.textLight,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+  },
   header: {
     backgroundColor: COLORS.card,
     paddingHorizontal: 18,
@@ -1574,58 +1626,47 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
-
   headerTop: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 17,
   },
-
   departmentMark: {
-    width: 38,
-    height: 38,
-    borderRadius: 7,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
     backgroundColor: COLORS.primary,
     justifyContent: "center",
     alignItems: "center",
   },
-
   departmentTitle: {
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 0.8,
     color: COLORS.primary,
   },
-
   departmentSubtitle: {
     fontSize: 11,
     color: COLORS.textLight,
-    marginTop: 2,
+    marginTop: 3,
   },
-
   title: {
     fontSize: 21,
+    lineHeight: 28,
     fontWeight: "800",
     color: COLORS.text,
   },
-
   subtitle: {
     marginTop: 5,
     color: COLORS.textLight,
     fontSize: 13,
     lineHeight: 19,
   },
-
-  /* =======================================================
-     PROGRESS
-  ======================================================= */
-
   progressContainer: {
     flexDirection: "row",
     alignItems: "center",
     marginTop: 19,
   },
-
   progressCircle: {
     width: 31,
     height: 31,
@@ -1634,48 +1675,36 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-
   progressCircleActive: {
     backgroundColor: COLORS.primary,
   },
-
   progressNumber: {
     color: COLORS.textLight,
     fontSize: 12,
     fontWeight: "800",
   },
-
   progressNumberActive: {
     color: "#FFFFFF",
   },
-
   progressLine: {
     flex: 1,
     height: 2,
     backgroundColor: "#DCE2E7",
     marginHorizontal: 6,
   },
-
   progressLineActive: {
     backgroundColor: COLORS.primary,
   },
-
   progressLabel: {
     marginTop: 8,
     color: COLORS.textLight,
     fontSize: 11,
     fontWeight: "700",
   },
-
-  /* =======================================================
-     CONTENT
-  ======================================================= */
-
   container: {
     padding: 15,
     paddingBottom: 35,
   },
-
   noticeBox: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1686,7 +1715,6 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 14,
   },
-
   noticeText: {
     flex: 1,
     marginLeft: 9,
@@ -1694,7 +1722,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
   },
-
+  reasonBanner: {
+    backgroundColor: COLORS.softRed,
+    borderWidth: 1,
+    borderColor: "#FECDCA",
+    borderRadius: 9,
+    padding: 12,
+    marginBottom: 14,
+  },
   card: {
     backgroundColor: COLORS.card,
     borderRadius: 12,
@@ -1702,12 +1737,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-
   sectionHeading: {
     flexDirection: "row",
     alignItems: "center",
   },
-
   sectionNumber: {
     width: 34,
     height: 34,
@@ -1717,47 +1750,36 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 11,
   },
-
   sectionNumberText: {
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "800",
   },
-
   sectionHeader: {
     fontSize: 17,
     fontWeight: "800",
     color: COLORS.text,
   },
-
   sectionDescription: {
     color: COLORS.textLight,
     fontSize: 12,
     lineHeight: 17,
-    marginTop: 2,
+    marginTop: 3,
   },
-
   divider: {
     height: 1,
     backgroundColor: COLORS.border,
     marginVertical: 18,
   },
-
-  /* =======================================================
-     INPUTS
-  ======================================================= */
-
   inputGroup: {
     marginBottom: 16,
   },
-
   label: {
     fontSize: 13,
     fontWeight: "700",
     color: COLORS.text,
     marginBottom: 7,
   },
-
   input: {
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1768,30 +1790,21 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     color: COLORS.text,
   },
-
   multilineInput: {
-    height: 90,
-    paddingTop: 12,
+    minHeight: 90,
+    textAlignVertical: "top",
   },
-
   twoColumn: {
     flexDirection: "row",
     gap: 10,
   },
-
   column: {
     flex: 1,
   },
-
-  /* =======================================================
-     VEHICLE TYPES
-  ======================================================= */
-
   vehicleTypes: {
-    marginTop: 3,
+    marginTop: 8,
     marginBottom: 13,
   },
-
   optionCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -1802,12 +1815,10 @@ const styles = StyleSheet.create({
     marginBottom: 9,
     backgroundColor: "#FFFFFF",
   },
-
   optionCardActive: {
     borderColor: COLORS.primary,
     backgroundColor: COLORS.softBlue,
   },
-
   radio: {
     width: 19,
     height: 19,
@@ -1818,39 +1829,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 11,
   },
-
   radioActive: {
     borderColor: COLORS.primary,
   },
-
   radioInner: {
     width: 9,
     height: 9,
     borderRadius: 5,
     backgroundColor: COLORS.primary,
   },
-
-  optionInformation: {
-    flex: 1,
-  },
-
   optionTitle: {
     fontSize: 13,
     fontWeight: "700",
     color: COLORS.text,
   },
-
   optionDescription: {
     fontSize: 11,
     color: COLORS.textLight,
     marginTop: 3,
     lineHeight: 16,
   },
-
-  /* =======================================================
-     DOCUMENTS
-  ======================================================= */
-
   documentNotice: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1861,7 +1859,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 17,
   },
-
   documentNoticeText: {
     flex: 1,
     marginLeft: 8,
@@ -1869,42 +1866,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 17,
   },
-
   documentGroup: {
-    marginBottom: 18,
+    marginBottom: 19,
   },
-
-  documentHeader: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginBottom: 7,
-  },
-
   documentLabel: {
     color: COLORS.text,
     fontSize: 13,
     fontWeight: "700",
   },
-
   documentDescription: {
     color: COLORS.textLight,
     fontSize: 11,
     lineHeight: 16,
-    marginTop: 2,
-    paddingRight: 5,
+    marginTop: 4,
+    marginBottom: 8,
   },
-
-  requiredBadge: {
-    fontSize: 8,
-    fontWeight: "800",
-    color: COLORS.primary,
-    backgroundColor: COLORS.softBlue,
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginLeft: 7,
-  },
-
   uploadBox: {
     minHeight: 63,
     flexDirection: "row",
@@ -1915,28 +1891,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     backgroundColor: "#FAFCFD",
   },
-
-  uploadIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 7,
-    backgroundColor: COLORS.softBlue,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
   uploadTitle: {
     color: COLORS.primary,
     fontSize: 13,
     fontWeight: "700",
   },
-
   uploadHint: {
     color: COLORS.textLight,
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 3,
   },
-
   filePreview: {
     flexDirection: "row",
     alignItems: "center",
@@ -1946,73 +1910,79 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
   },
-
-  fileIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 7,
-    backgroundColor: "#D8F3E5",
-    justifyContent: "center",
+  savedFilePreview: {
+    flexDirection: "row",
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#C7DDED",
+    backgroundColor: COLORS.softBlue,
+    padding: 10,
+    borderRadius: 8,
   },
-
   fileInformation: {
     flex: 1,
     marginLeft: 9,
   },
-
   fileName: {
     color: COLORS.text,
     fontSize: 12,
     fontWeight: "700",
   },
-
   fileStatus: {
     color: COLORS.success,
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 3,
     fontWeight: "600",
   },
-
+  savedFileStatus: {
+    color: COLORS.primary,
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: "600",
+  },
   removeButton: {
     marginLeft: 8,
     padding: 5,
   },
-
-  /* =======================================================
-     SUMMARY
-  ======================================================= */
-
+  replaceButton: {
+    marginLeft: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.card,
+  },
+  replaceButtonText: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: "800",
+  },
   summaryCard: {
     marginTop: 14,
   },
-
   summaryHeader: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 13,
   },
-
   summaryTitle: {
     marginLeft: 8,
     fontSize: 15,
     fontWeight: "800",
     color: COLORS.text,
   },
-
   summaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 9,
+    paddingVertical: 10,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
   },
-
   summaryLabel: {
     color: COLORS.textLight,
     fontSize: 12,
   },
-
   summaryValue: {
     flex: 1,
     textAlign: "right",
@@ -2021,17 +1991,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-
-  /* =======================================================
-     BUTTONS
-  ======================================================= */
-
   buttonRow: {
     flexDirection: "row",
     gap: 9,
     marginTop: 15,
   },
-
   secondaryButton: {
     flex: 1,
     minHeight: 48,
@@ -2044,13 +2008,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     borderRadius: 8,
   },
-
   secondaryButtonText: {
     color: COLORS.text,
     fontSize: 13,
     fontWeight: "700",
   },
-
   primaryButton: {
     flex: 2,
     minHeight: 48,
@@ -2061,21 +2023,14 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     borderRadius: 8,
   },
-
   primaryButtonDisabled: {
     opacity: 0.55,
   },
-
   primaryButtonText: {
     color: "#FFFFFF",
     fontSize: 13,
     fontWeight: "800",
   },
-
-  /* =======================================================
-     FOOTER
-  ======================================================= */
-
   footer: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -2083,13 +2038,216 @@ const styles = StyleSheet.create({
     marginTop: 17,
     paddingHorizontal: 10,
   },
-
   footerText: {
     flex: 1,
     marginLeft: 7,
     color: COLORS.textLight,
     fontSize: 10,
     lineHeight: 15,
+    textAlign: "center",
+  },
+
+  // ---- Status screen ----
+  confirmationContainer: {
+    padding: 16,
+    paddingBottom: 30,
+  },
+  confirmationCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 16,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: "center",
+  },
+  confirmationIcon: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 18,
+  },
+  confirmationEyebrow: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.5,
+    color: COLORS.primary,
+    textAlign: "center",
+  },
+  confirmationTitle: {
+    fontSize: 24,
+    lineHeight: 31,
+    fontWeight: "800",
+    color: COLORS.text,
+    textAlign: "center",
+    marginTop: 8,
+  },
+  confirmationDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: COLORS.textLight,
+    textAlign: "center",
+    marginTop: 8,
+  },
+  statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginTop: 16,
+  },
+  statusBadgeText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  tracker: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 24,
+  },
+  trackerStep: {
+    alignItems: "center",
+    width: 74,
+  },
+  trackerDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#E7EBEF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trackerDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#FFFFFF",
+  },
+  trackerLabel: {
+    marginTop: 6,
+    fontSize: 10,
+    fontWeight: "700",
+    color: COLORS.textLight,
+    textAlign: "center",
+  },
+  trackerLabelOn: {
+    color: COLORS.text,
+  },
+  trackerLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: "#DCE2E7",
+    marginTop: 11,
+  },
+  rejectionPanel: {
+    marginTop: 12,
+    padding: 15,
+    borderRadius: 12,
+    backgroundColor: COLORS.softRed,
+    borderWidth: 1,
+    borderColor: "#FECDCA",
+  },
+  rejectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    marginBottom: 7,
+  },
+  rejectionTitle: {
+    color: COLORS.error,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  rejectionDescription: {
+    color: COLORS.text,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  statusSummaryCard: {
+    marginTop: 12,
+    paddingBottom: 8,
+  },
+  nextCard: {
+    marginTop: 12,
+  },
+  nextStepsTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: COLORS.text,
+    marginBottom: 13,
+  },
+  nextStepRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 11,
+    marginBottom: 12,
+  },
+  nextStepText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 19,
+    color: COLORS.textLight,
+  },
+  confirmationPrimaryButton: {
+    width: "100%",
+    minHeight: 51,
+    backgroundColor: COLORS.primary,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    marginTop: 16,
+  },
+  confirmationPrimaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  outlineButton: {
+    width: "100%",
+    minHeight: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.card,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 9,
+  },
+  outlineButtonText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  confirmationSecondaryButton: {
+    width: "100%",
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  confirmationSecondaryButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.textLight,
+  },
+  confirmationFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    marginTop: 10,
+  },
+  confirmationFooterText: {
+    fontSize: 10,
+    lineHeight: 16,
+    color: COLORS.textLight,
     textAlign: "center",
   },
 });

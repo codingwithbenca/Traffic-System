@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -14,8 +15,11 @@ import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 
 import {
   collection,
+  doc,
   getDocs,
   query,
+  runTransaction,
+  serverTimestamp,
   where,
 } from "firebase/firestore";
 
@@ -26,11 +30,7 @@ import { useAuth } from "../../context/AuthContext";
    TYPES
 ========================================================= */
 
-type FineStatus =
-  | "Outstanding"
-  | "Overdue"
-  | "Paid"
-  | "Disputed";
+type FineStatus = "Outstanding" | "Overdue" | "Paid" | "Disputed";
 
 type FirestoreFine = {
   fineId?: string;
@@ -89,210 +89,165 @@ type DisplayFine = FirestoreFine & {
   displayStatus: FineStatus;
 };
 
+type PaymentMethodId = "card" | "eft" | "wallet";
+
+type PaymentReceipt = {
+  reference: string;
+  amount: number;
+  ticketId: string;
+  method: string;
+  paidAt: Date;
+};
+
+const PAYMENT_METHODS: {
+  id: PaymentMethodId;
+  title: string;
+  description: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
+}[] = [
+  {
+    id: "card",
+    title: "Card payment",
+    description: "Debit or credit card (simulated)",
+    icon: "credit-card",
+  },
+  {
+    id: "eft",
+    title: "Instant EFT",
+    description: "Pay from your bank account (simulated)",
+    icon: "account-balance",
+  },
+  {
+    id: "wallet",
+    title: "Digital wallet",
+    description: "Pay from your wallet balance (simulated)",
+    icon: "account-balance-wallet",
+  },
+];
+
 /* =========================================================
    SCREEN
 ========================================================= */
 
-export default function OutstandingPenaltiesScreen({
-  navigation,
-}: any) {
+export default function OutstandingPenaltiesScreen({ navigation }: any) {
   const { user } = useAuth();
 
   const [fines, setFines] = useState<DisplayFine[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  /* =======================================================
-     DEBUG LOGS
-  ======================================================= */
-
-  useEffect(() => {
-    console.log("======================================");
-    console.log("💰 OUTSTANDING PENALTIES SCREEN");
-    console.log("======================================");
-
-    console.log("👤 USER:", user);
-    console.log("🆔 USER ID:", user?.idNumber);
-    console.log("👤 USER NAME:", user?.fullName);
-  }, [user]);
+  // Simulated payment state
+  const [payingFine, setPayingFine] = useState<DisplayFine | null>(null);
+  const [selectedMethod, setSelectedMethod] =
+    useState<PaymentMethodId>("card");
+  const [processing, setProcessing] = useState(false);
+  const [receipt, setReceipt] = useState<PaymentReceipt | null>(null);
 
   /* =======================================================
      STATUS NORMALIZATION
-     
-     Your generator creates:
-     
-     outstanding
-     paid
-     disputed
-     
-     This converts those values into UI statuses.
   ======================================================= */
 
-  const getDisplayStatus = useCallback(
-    (fine: FirestoreFine): FineStatus => {
-      const paymentStatus = String(
-        fine.paymentStatus ?? ""
-      ).toLowerCase();
+  const getDisplayStatus = useCallback((fine: FirestoreFine): FineStatus => {
+    const paymentStatus = String(fine.paymentStatus ?? "").toLowerCase();
+    const status = String(fine.status ?? "").toLowerCase();
 
-      const status = String(
-        fine.status ?? ""
-      ).toLowerCase();
+    // PAID
+    if (
+      paymentStatus === "paid" ||
+      paymentStatus === "settled" ||
+      status === "paid" ||
+      status === "settled"
+    ) {
+      return "Paid";
+    }
 
-      /* -----------------------------------------------
-         PAID
-      ------------------------------------------------ */
+    // DISPUTED
+    if (
+      paymentStatus === "disputed" ||
+      paymentStatus.includes("dispute") ||
+      status === "disputed" ||
+      status.includes("dispute") ||
+      status.includes("review")
+    ) {
+      return "Disputed";
+    }
+
+    // OVERDUE: due date passed and not paid
+    if (fine.dueDate) {
+      const dueDate = new Date(fine.dueDate);
+      const now = new Date();
 
       if (
-        paymentStatus === "paid" ||
-        paymentStatus === "settled" ||
-        status === "paid" ||
-        status === "settled"
+        !Number.isNaN(dueDate.getTime()) &&
+        dueDate.getTime() < now.getTime()
       ) {
-        return "Paid";
+        return "Overdue";
       }
+    }
 
-      /* -----------------------------------------------
-         DISPUTED
-      ------------------------------------------------ */
-
-      if (
-        paymentStatus === "disputed" ||
-        paymentStatus.includes("dispute") ||
-        status === "disputed" ||
-        status.includes("dispute") ||
-        status.includes("review")
-      ) {
-        return "Disputed";
-      }
-
-      /* -----------------------------------------------
-         OVERDUE
-         
-         If the due date has passed and the fine
-         isn't paid, display it as overdue.
-      ------------------------------------------------ */
-
-      if (fine.dueDate) {
-        const dueDate = new Date(fine.dueDate);
-        const now = new Date();
-
-        if (
-          !Number.isNaN(dueDate.getTime()) &&
-          dueDate.getTime() < now.getTime()
-        ) {
-          return "Overdue";
-        }
-      }
-
-      /* -----------------------------------------------
-         DEFAULT
-      ------------------------------------------------ */
-
-      return "Outstanding";
-    },
-    []
-  );
+    return "Outstanding";
+  }, []);
 
   /* =======================================================
-     GET AMOUNT
+     AMOUNT / CURRENCY / DATE HELPERS
   ======================================================= */
 
-  const getAmount = useCallback(
-    (fine: FirestoreFine): number => {
-      const amount = Number(
-        fine.outstandingAmount ??
-          fine.fineAmount ??
-          fine.amount ??
-          0
-      );
+  const getAmount = useCallback((fine: FirestoreFine): number => {
+    const amount = Number(
+      fine.outstandingAmount ?? fine.fineAmount ?? fine.amount ?? 0
+    );
 
-      return Number.isFinite(amount)
-        ? amount
-        : 0;
-    },
-    []
-  );
+    return Number.isFinite(amount) ? amount : 0;
+  }, []);
 
-  /* =======================================================
-     FORMAT CURRENCY
-  ======================================================= */
+  const formatCurrency = useCallback((amount: number) => {
+    return `R ${amount.toLocaleString("en-ZA", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }, []);
 
-  const formatCurrency = useCallback(
-    (amount: number) => {
-      return `R ${amount.toLocaleString("en-ZA", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
-    },
-    []
-  );
+  const formatDate = useCallback((date?: string | any) => {
+    if (!date) {
+      return "Date unavailable";
+    }
 
-  /* =======================================================
-     FORMAT DATE
-  ======================================================= */
+    try {
+      let parsedDate: Date;
 
-  const formatDate = useCallback(
-    (date?: string | any) => {
-      if (!date) {
-        return "Date unavailable";
+      if (typeof date === "object" && typeof date.toDate === "function") {
+        parsedDate = date.toDate();
+      } else {
+        parsedDate = new Date(date);
       }
 
-      try {
-        let parsedDate: Date;
-
-        /*
-         * Firestore Timestamp
-         */
-
-        if (
-          typeof date === "object" &&
-          typeof date.toDate === "function"
-        ) {
-          parsedDate = date.toDate();
-        } else {
-          parsedDate = new Date(date);
-        }
-
-        if (Number.isNaN(parsedDate.getTime())) {
-          return String(date);
-        }
-
-        return parsedDate.toLocaleDateString(
-          "en-ZA",
-          {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          }
-        );
-      } catch {
+      if (Number.isNaN(parsedDate.getTime())) {
         return String(date);
       }
-    },
-    []
-  );
+
+      return parsedDate.toLocaleDateString("en-ZA", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return String(date);
+    }
+  }, []);
+
+  const getReference = (fine: FirestoreFine) => {
+    return fine.ticketId ?? fine.reference ?? fine.fineId ?? "Not Available";
+  };
 
   /* =======================================================
      LOAD FINES
-     
-     IMPORTANT:
-     
-     Reads:
-     
-     fines/{fineId}
-     
-     where:
-     
-     citizenId == user.idNumber
+
+     Reads fines where citizenId == user.idNumber
   ======================================================= */
 
   const loadFines = useCallback(
     async (showLoader = true) => {
       if (!user?.idNumber) {
-        console.log(
-          "⚠️ Cannot load fines: user.idNumber missing"
-        );
-
         setFines([]);
 
         if (showLoader) {
@@ -307,143 +262,39 @@ export default function OutstandingPenaltiesScreen({
           setLoading(true);
         }
 
-        console.log("======================================");
-        console.log("🔎 LOADING TRAFFIC FINES");
-        console.log("======================================");
-
-        console.log(
-          "🆔 Searching citizenId:",
-          user.idNumber
-        );
-
-        const finesRef = collection(
-          db,
-          "fines"
-        );
-
         const finesQuery = query(
-          finesRef,
-          where(
-            "citizenId",
-            "==",
-            user.idNumber
-          )
+          collection(db, "fines"),
+          where("citizenId", "==", user.idNumber)
         );
 
-        const snapshot =
-          await getDocs(finesQuery);
+        const snapshot = await getDocs(finesQuery);
 
-        console.log(
-          "📊 FIRESTORE FINES FOUND:",
-          snapshot.size
-        );
+        const loadedFines: DisplayFine[] = snapshot.docs.map((fineDoc) => {
+          const data = fineDoc.data() as FirestoreFine;
 
-        const loadedFines: DisplayFine[] =
-          snapshot.docs.map((fineDoc) => {
-            const data =
-              fineDoc.data() as FirestoreFine;
+          return {
+            ...data,
+            id: fineDoc.id,
+            displayStatus: getDisplayStatus(data),
+          };
+        });
 
-            const displayStatus =
-              getDisplayStatus(data);
-
-            console.log(
-              "--------------------------------------"
-            );
-
-            console.log(
-              "🎫 FINE DOCUMENT:",
-              fineDoc.id
-            );
-
-            console.log(
-              "🆔 citizenId:",
-              data.citizenId
-            );
-
-            console.log(
-              "🎟 ticketId:",
-              data.ticketId
-            );
-
-            console.log(
-              "🚗 registration:",
-              data.registrationNumber
-            );
-
-            console.log(
-              "💰 amount:",
-              data.amount
-            );
-
-            console.log(
-              "💰 outstanding:",
-              data.outstandingAmount
-            );
-
-            console.log(
-              "📌 status:",
-              data.status
-            );
-
-            console.log(
-              "💳 paymentStatus:",
-              data.paymentStatus
-            );
-
-            console.log(
-              "📅 dueDate:",
-              data.dueDate
-            );
-
-            console.log(
-              "➡️ DISPLAY STATUS:",
-              displayStatus
-            );
-
-            return {
-              ...data,
-              id: fineDoc.id,
-              displayStatus,
-            };
-          });
-
-        /*
-         * Sort newest first
-         */
-
+        // Newest first
         loadedFines.sort((a, b) => {
           const dateA = new Date(
-            a.offenceDate ??
-              a.date ??
-              a.issuedAt ??
-              0
+            a.offenceDate ?? a.date ?? a.issuedAt ?? 0
           ).getTime();
 
           const dateB = new Date(
-            b.offenceDate ??
-              b.date ??
-              b.issuedAt ??
-              0
+            b.offenceDate ?? b.date ?? b.issuedAt ?? 0
           ).getTime();
 
           return dateB - dateA;
         });
 
-        console.log(
-          "======================================"
-        );
-
-        console.log(
-          "✅ FINAL FINES:",
-          loadedFines.length
-        );
-
         setFines(loadedFines);
       } catch (error) {
-        console.error(
-          "❌ LOAD FINES ERROR:",
-          error
-        );
+        console.error("❌ LOAD FINES ERROR:", error);
 
         Alert.alert(
           "Unable to Load Penalties",
@@ -456,202 +307,188 @@ export default function OutstandingPenaltiesScreen({
         setRefreshing(false);
       }
     },
-    [
-      user?.idNumber,
-      getDisplayStatus,
-    ]
+    [user?.idNumber, getDisplayStatus]
   );
-
-  /* =======================================================
-     LOAD WHEN USER IS AVAILABLE
-  ======================================================= */
 
   useEffect(() => {
     loadFines(true);
   }, [loadFines]);
 
-  /* =======================================================
-     REFRESH
-  ======================================================= */
-
   const handleRefresh = async () => {
     setRefreshing(true);
-
     await loadFines(false);
   };
 
   /* =======================================================
-     FILTERS
+     FILTERS AND TOTALS
   ======================================================= */
 
-  const outstandingFines =
-    useMemo(() => {
-      return fines.filter(
-        (fine) =>
-          fine.displayStatus ===
-          "Outstanding"
-      );
-    }, [fines]);
+  const outstandingFines = useMemo(
+    () => fines.filter((fine) => fine.displayStatus === "Outstanding"),
+    [fines]
+  );
 
-  const overdueFines =
-    useMemo(() => {
-      return fines.filter(
-        (fine) =>
-          fine.displayStatus ===
-          "Overdue"
-      );
-    }, [fines]);
+  const overdueFines = useMemo(
+    () => fines.filter((fine) => fine.displayStatus === "Overdue"),
+    [fines]
+  );
 
-  const paidFines =
-    useMemo(() => {
-      return fines.filter(
-        (fine) =>
-          fine.displayStatus ===
-          "Paid"
-      );
-    }, [fines]);
+  const paidFines = useMemo(
+    () => fines.filter((fine) => fine.displayStatus === "Paid"),
+    [fines]
+  );
 
-  const disputedFines =
-    useMemo(() => {
-      return fines.filter(
+  const totalOutstanding = useMemo(() => {
+    return fines
+      .filter(
         (fine) =>
-          fine.displayStatus ===
-          "Disputed"
-      );
-    }, [fines]);
+          fine.displayStatus === "Outstanding" ||
+          fine.displayStatus === "Overdue"
+      )
+      .reduce((total, fine) => total + getAmount(fine), 0);
+  }, [fines, getAmount]);
 
   /* =======================================================
-     TOTAL OUTSTANDING
+     SIMULATED PAYMENT
   ======================================================= */
 
-  const totalOutstanding =
-    useMemo(() => {
-      return fines
-        .filter(
-          (fine) =>
-            fine.displayStatus ===
-              "Outstanding" ||
-            fine.displayStatus ===
-              "Overdue"
-        )
-        .reduce(
-          (total, fine) =>
-            total + getAmount(fine),
-          0
-        );
-    }, [fines, getAmount]);
-
-  /* =======================================================
-     TOTAL PAID
-  ======================================================= */
-
-  const totalPaid =
-    useMemo(() => {
-      return paidFines.reduce(
-        (total, fine) => {
-          /*
-           * For paid fines your generator sets
-           * outstandingAmount = 0.
-           *
-           * Therefore use fine.amount here.
-           */
-
-          const amount = Number(
-            fine.amount ??
-              fine.fineAmount ??
-              0
-          );
-
-          return (
-            total +
-            (Number.isFinite(amount)
-              ? amount
-              : 0)
-          );
-        },
-        0
-      );
-    }, [paidFines]);
-
-  /* =======================================================
-     REFERENCE
-  ======================================================= */
-
-  const getReference = (
-    fine: FirestoreFine
-  ) => {
-    return (
-      fine.ticketId ??
-      fine.reference ??
-      fine.fineId ??
-      "Not Available"
-    );
+  const handlePay = (fine: DisplayFine) => {
+    setReceipt(null);
+    setSelectedMethod("card");
+    setPayingFine(fine);
   };
 
-  /* =======================================================
-     PAY FINE
-  ======================================================= */
+  const closePaymentModal = () => {
+    if (processing) return;
+    setPayingFine(null);
+    setReceipt(null);
+  };
 
-  const handlePay = (
-    fine: DisplayFine
-  ) => {
-    const reference =
-      getReference(fine);
+  const confirmPayment = async () => {
+    if (!payingFine || processing) return;
 
-    const amount =
-      getAmount(fine);
-
-    console.log(
-      "💳 PAY FINE:",
-      reference,
-      amount
-    );
-
-    /*
-     * If your navigation route exists,
-     * send the complete fine to it.
-     */
-
-    if (navigation?.navigate) {
-      navigation.navigate(
-        "TrafficFinePayment",
-        {
-          fineId: fine.id,
-          ticketId: reference,
-          amount,
-          fine,
-        }
+    if (!user?.idNumber) {
+      Alert.alert(
+        "Session Required",
+        "Please sign in again before making a payment."
       );
-
       return;
     }
 
-    Alert.alert(
-      "Payment",
-      `${reference}\n\nAmount due: ${formatCurrency(
-        amount
-      )}`,
-      [
-        {
-          text: "OK",
-        },
-      ]
-    );
+    const fine = payingFine;
+    const method = PAYMENT_METHODS.find((item) => item.id === selectedMethod)!;
+    const ticketId = getReference(fine);
+
+    setProcessing(true);
+
+    try {
+      // Simulated payment gateway delay
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+
+      const fineRef = doc(db, "fines", fine.id);
+      const historyRef = doc(collection(db, "paymentHistory"));
+
+      const paymentReference = `PAY-${Date.now()
+        .toString(36)
+        .toUpperCase()}-${historyRef.id.slice(0, 4).toUpperCase()}`;
+
+      // One atomic step: mark the fine paid AND write the history record.
+      const amountPaid = await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(fineRef);
+
+        if (!snapshot.exists()) {
+          throw new Error("This fine no longer exists.");
+        }
+
+        const current = snapshot.data() as FirestoreFine;
+
+        if (getDisplayStatus(current) === "Paid") {
+          throw new Error("This fine has already been paid.");
+        }
+
+        const amountDue = getAmount(current);
+
+        if (amountDue <= 0) {
+          throw new Error("There is no outstanding balance on this fine.");
+        }
+
+        // 1) Subtract the money: balance goes to zero, fine is settled.
+        transaction.update(fineRef, {
+          outstandingAmount: 0,
+          status: "paid",
+          paymentStatus: "paid",
+          paymentReference,
+          paymentMethod: method.id,
+          paidAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        // 2) Leave a trail for payment history.
+        transaction.set(historyRef, {
+          paymentId: historyRef.id,
+          reference: paymentReference,
+          type: "traffic_fine",
+          description: `Traffic fine payment: ${
+            current.offence ?? current.description ?? "Traffic violation"
+          }`,
+
+          citizenId: user.idNumber,
+          userId: user.id ?? null,
+          citizenName: user.fullName ?? "",
+
+          fineId: fine.id,
+          ticketId,
+          registrationNumber: current.registrationNumber ?? null,
+
+          amount: amountDue,
+          currency: "ZAR",
+          balanceBefore: amountDue,
+          balanceAfter: 0,
+
+          method: method.id,
+          methodLabel: method.title,
+          status: "completed",
+          simulated: true,
+
+          createdAt: serverTimestamp(),
+        });
+
+        return amountDue;
+      });
+
+      setReceipt({
+        reference: paymentReference,
+        amount: amountPaid,
+        ticketId,
+        method: method.title,
+        paidAt: new Date(),
+      });
+
+      // Refresh the list so the fine moves to "Paid"
+      // and the outstanding total drops.
+      loadFines(false);
+    } catch (error: any) {
+      console.error("❌ PAYMENT ERROR:", error);
+
+      Alert.alert(
+        "Payment Unsuccessful",
+        error?.message ||
+          "We could not complete your payment. You have not been charged. Please try again."
+      );
+    } finally {
+      setProcessing(false);
+    }
   };
 
   /* =======================================================
-     RENDER LOADING
+     LOADING
   ======================================================= */
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <View style={styles.loadingIcon}>
-          <MaterialIcons
-            name="receipt-long"
-            size={30}
-            color="#003366"
-          />
+          <MaterialIcons name="receipt-long" size={30} color="#003366" />
         </View>
 
         <ActivityIndicator
@@ -660,9 +497,7 @@ export default function OutstandingPenaltiesScreen({
           style={styles.loader}
         />
 
-        <Text style={styles.loadingTitle}>
-          Loading penalties
-        </Text>
+        <Text style={styles.loadingTitle}>Loading penalties</Text>
 
         <Text style={styles.loadingText}>
           Retrieving your traffic records...
@@ -671,6 +506,8 @@ export default function OutstandingPenaltiesScreen({
     );
   }
 
+  const unpaidCount = outstandingFines.length + overdueFines.length;
+
   /* =======================================================
      MAIN UI
   ======================================================= */
@@ -678,9 +515,7 @@ export default function OutstandingPenaltiesScreen({
   return (
     <View style={styles.container}>
       <ScrollView
-        contentContainerStyle={
-          styles.content
-        }
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -690,194 +525,110 @@ export default function OutstandingPenaltiesScreen({
           />
         }
       >
-        {/* =================================================
-            HEADER
-        ================================================= */}
+        {/* HEADER */}
 
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
             <View style={styles.headerAccent} />
 
             <View style={styles.headerText}>
-              <Text style={styles.eyebrow}>
-                TRAFFIC SERVICES
-              </Text>
+              <Text style={styles.eyebrow}>TRAFFIC SERVICES</Text>
 
-              <Text style={styles.title}>
-                Outstanding Penalties
-              </Text>
+              <Text style={styles.title}>Outstanding Penalties</Text>
 
               <Text style={styles.subtitle}>
-                View unpaid traffic penalties
-                and settle your outstanding
+                View unpaid traffic penalties and settle your outstanding
                 balance securely.
               </Text>
             </View>
           </View>
         </View>
 
-        {/* =================================================
-            ACCOUNT
-        ================================================= */}
+        {/* ACCOUNT */}
 
         <View style={styles.accountCard}>
           <View style={styles.accountIcon}>
-            <MaterialIcons
-              name="person"
-              size={21}
-              color="#003366"
-            />
+            <MaterialIcons name="person" size={21} color="#003366" />
           </View>
 
           <View style={styles.accountInfo}>
-            <Text style={styles.accountLabel}>
-              CITIZEN ACCOUNT
+            <Text style={styles.accountLabel}>CITIZEN ACCOUNT</Text>
+
+            <Text style={styles.accountName} numberOfLines={1}>
+              {user?.fullName ?? "Citizen"}
             </Text>
 
-            <Text
-              style={styles.accountName}
-              numberOfLines={1}
-            >
-              {user?.fullName ??
-                "Citizen"}
-            </Text>
-
-            <Text
-              style={styles.accountId}
-            >
-              ID:{" "}
-              {user?.idNumber ??
-                "Unavailable"}
+            <Text style={styles.accountId}>
+              ID: {user?.idNumber ?? "Unavailable"}
             </Text>
           </View>
 
           <View style={styles.verifiedBadge}>
-            <MaterialIcons
-              name="verified"
-              size={15}
-              color="#2E7D32"
-            />
+            <MaterialIcons name="verified" size={15} color="#2E7D32" />
 
-            <Text
-              style={styles.verifiedText}
-            >
-              Verified
-            </Text>
+            <Text style={styles.verifiedText}>Verified</Text>
           </View>
         </View>
 
-        {/* =================================================
-            SUMMARY
-        ================================================= */}
+        {/* SUMMARY */}
 
         <View style={styles.summaryCard}>
           <View style={styles.summaryIcon}>
-            <MaterialIcons
-              name="receipt-long"
-              size={25}
-              color="#003366"
-            />
+            <MaterialIcons name="receipt-long" size={25} color="#003366" />
           </View>
 
           <View style={styles.summaryContent}>
-            <Text style={styles.summaryLabel}>
-              Total Outstanding
-            </Text>
+            <Text style={styles.summaryLabel}>Total Outstanding</Text>
 
             <Text style={styles.summaryAmount}>
-              {formatCurrency(
-                totalOutstanding
-              )}
+              {formatCurrency(totalOutstanding)}
             </Text>
 
-            <Text
-              style={
-                styles.summaryDescription
-              }
-            >
-              Amount currently requiring
-              payment
+            <Text style={styles.summaryDescription}>
+              Amount currently requiring payment
             </Text>
           </View>
         </View>
 
-        {/* =================================================
-            QUICK STATS
-        ================================================= */}
+        {/* QUICK STATS */}
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <View style={styles.statIcon}>
-              <MaterialIcons
-                name="pending-actions"
-                size={21}
-                color="#003366"
-              />
+              <MaterialIcons name="pending-actions" size={21} color="#003366" />
             </View>
 
-            <Text style={styles.statNumber}>
-              {outstandingFines.length}
-            </Text>
+            <Text style={styles.statNumber}>{outstandingFines.length}</Text>
 
-            <Text style={styles.statLabel}>
-              Outstanding
-            </Text>
+            <Text style={styles.statLabel}>Outstanding</Text>
           </View>
 
           <View style={styles.statCard}>
-            <View
-              style={
-                styles.statIconWarning
-              }
-            >
-              <MaterialIcons
-                name="warning"
-                size={21}
-                color="#C62828"
-              />
+            <View style={styles.statIconWarning}>
+              <MaterialIcons name="warning" size={21} color="#C62828" />
             </View>
 
-            <Text
-              style={[
-                styles.statNumber,
-                styles.warningText,
-              ]}
-            >
+            <Text style={[styles.statNumber, styles.warningText]}>
               {overdueFines.length}
             </Text>
 
-            <Text style={styles.statLabel}>
-              Overdue
-            </Text>
+            <Text style={styles.statLabel}>Overdue</Text>
           </View>
 
           <View style={styles.statCard}>
             <View style={styles.statIconPaid}>
-              <MaterialIcons
-                name="check-circle"
-                size={21}
-                color="#2E7D32"
-              />
+              <MaterialIcons name="check-circle" size={21} color="#2E7D32" />
             </View>
 
-            <Text
-              style={[
-                styles.statNumber,
-                styles.paidNumber,
-              ]}
-            >
+            <Text style={[styles.statNumber, styles.paidNumber]}>
               {paidFines.length}
             </Text>
 
-            <Text style={styles.statLabel}>
-              Paid
-            </Text>
+            <Text style={styles.statLabel}>Paid</Text>
           </View>
         </View>
 
-        {/* =================================================
-            INFORMATION
-        ================================================= */}
+        {/* INFORMATION */}
 
         <View style={styles.infoCard}>
           <Ionicons
@@ -887,142 +638,272 @@ export default function OutstandingPenaltiesScreen({
           />
 
           <Text style={styles.infoText}>
-            Traffic penalties shown here
-            are associated with your verified
+            Traffic penalties shown here are associated with your verified
             citizen account.
           </Text>
         </View>
 
-        {/* =================================================
-            RECORD HEADER
-        ================================================= */}
+        {/* RECORD HEADER */}
 
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={styles.sectionEyebrow}>
-              RECORDS
-            </Text>
+            <Text style={styles.sectionEyebrow}>RECORDS</Text>
 
-            <Text style={styles.sectionTitle}>
-              Unpaid Penalties
-            </Text>
+            <Text style={styles.sectionTitle}>Unpaid Penalties</Text>
           </View>
 
           <Text style={styles.sectionCount}>
-            {outstandingFines.length +
-              overdueFines.length}{" "}
-            {outstandingFines.length +
-              overdueFines.length ===
-            1
-              ? "penalty"
-              : "penalties"}
+            {unpaidCount} {unpaidCount === 1 ? "penalty" : "penalties"}
           </Text>
         </View>
 
-        {/* =================================================
-            PENALTIES
-        ================================================= */}
+        {/* PENALTIES */}
 
-        {outstandingFines.length ===
-          0 &&
-        overdueFines.length === 0 ? (
+        {unpaidCount === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
-              <MaterialIcons
-                name="check-circle"
-                size={42}
-                color="#2E7D32"
-              />
+              <MaterialIcons name="check-circle" size={42} color="#2E7D32" />
             </View>
 
-            <Text style={styles.emptyTitle}>
-              No Outstanding Penalties
-            </Text>
+            <Text style={styles.emptyTitle}>No Outstanding Penalties</Text>
 
             <Text style={styles.emptyText}>
-              You currently have no unpaid
-              traffic penalties on your
-              account.
+              You currently have no unpaid traffic penalties on your account.
             </Text>
 
             {fines.length > 0 && (
-              <Text
-                style={styles.emptySubtext}
-              >
+              <Text style={styles.emptySubtext}>
                 {fines.length} total traffic{" "}
-                {fines.length === 1
-                  ? "record"
-                  : "records"}{" "}
-                found, all currently
-                settled.
+                {fines.length === 1 ? "record" : "records"} found, all
+                currently settled.
               </Text>
             )}
           </View>
         ) : (
           <>
-            {outstandingFines.map(
-              (fine) =>
-                renderFineCard({
-                  fine,
-                  formatCurrency,
-                  formatDate,
-                  getReference,
-                  getAmount,
-                  handlePay,
-                })
+            {outstandingFines.map((fine) =>
+              renderFineCard({
+                fine,
+                formatCurrency,
+                formatDate,
+                getReference,
+                getAmount,
+                handlePay,
+              })
             )}
 
-            {overdueFines.map(
-              (fine) =>
-                renderFineCard({
-                  fine,
-                  formatCurrency,
-                  formatDate,
-                  getReference,
-                  getAmount,
-                  handlePay,
-                })
+            {overdueFines.map((fine) =>
+              renderFineCard({
+                fine,
+                formatCurrency,
+                formatDate,
+                getReference,
+                getAmount,
+                handlePay,
+              })
             )}
           </>
         )}
 
-        {/* =================================================
-            DEBUG / DATA INFORMATION
-        ================================================= */}
+        {/* DATA FOOTER */}
 
         <View style={styles.dataFooter}>
-          <MaterialIcons
-            name="database"
-            size={16}
-            color="#888"
-          />
+          <MaterialIcons name="storage" size={16} color="#888" />
 
           <Text style={styles.dataFooterText}>
-            {fines.length} traffic{" "}
-            {fines.length === 1
-              ? "record"
-              : "records"}{" "}
+            {fines.length} traffic {fines.length === 1 ? "record" : "records"}{" "}
             found for this citizen account
           </Text>
         </View>
 
-        {/* =================================================
-            FOOTER
-        ================================================= */}
+        {/* FOOTER */}
 
         <View style={styles.footer}>
-          <MaterialIcons
-            name="lock-outline"
-            size={18}
-            color="#777"
-          />
+          <MaterialIcons name="lock-outline" size={18} color="#777" />
 
           <Text style={styles.footerText}>
-            Payment information is handled
-            securely.
+            Payment information is handled securely.
           </Text>
         </View>
       </ScrollView>
+
+      {/* =================================================
+          SIMULATED PAYMENT SHEET
+      ================================================= */}
+
+      <Modal
+        visible={!!payingFine}
+        transparent
+        animationType="slide"
+        onRequestClose={closePaymentModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalSheet}>
+            {receipt ? (
+              <>
+                <View style={styles.successIcon}>
+                  <MaterialIcons
+                    name="check-circle"
+                    size={54}
+                    color="#2E7D32"
+                  />
+                </View>
+
+                <Text style={styles.modalTitle}>Payment Successful</Text>
+
+                <Text style={styles.modalSubtitle}>
+                  Your fine has been settled and the amount has been deducted
+                  from your outstanding balance.
+                </Text>
+
+                <View style={styles.receiptBox}>
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>Amount paid</Text>
+                    <Text style={styles.receiptValueBig}>
+                      {formatCurrency(receipt.amount)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>Fine</Text>
+                    <Text style={styles.receiptValue}>{receipt.ticketId}</Text>
+                  </View>
+
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>Method</Text>
+                    <Text style={styles.receiptValue}>{receipt.method}</Text>
+                  </View>
+
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>Reference</Text>
+                    <Text style={styles.receiptValue}>
+                      {receipt.reference}
+                    </Text>
+                  </View>
+
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptLabel}>Date</Text>
+                    <Text style={styles.receiptValue}>
+                      {receipt.paidAt.toLocaleString("en-ZA")}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.simulationNote}>
+                  This was a simulated payment. No real money was moved.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.payButton}
+                  activeOpacity={0.8}
+                  onPress={closePaymentModal}
+                >
+                  <Text style={styles.payButtonText}>Done</Text>
+                </TouchableOpacity>
+              </>
+            ) : payingFine ? (
+              <>
+                <Text style={styles.modalTitle}>Confirm Payment</Text>
+
+                <Text style={styles.modalSubtitle}>
+                  {payingFine.offence ??
+                    payingFine.description ??
+                    "Traffic violation"}
+                  {"\n"}
+                  {getReference(payingFine)}
+                </Text>
+
+                <View style={styles.modalAmountBox}>
+                  <Text style={styles.modalAmountLabel}>Amount to pay</Text>
+                  <Text style={styles.modalAmount}>
+                    {formatCurrency(getAmount(payingFine))}
+                  </Text>
+                </View>
+
+                <Text style={styles.methodHeading}>PAYMENT METHOD</Text>
+
+                {PAYMENT_METHODS.map((method) => {
+                  const selected = selectedMethod === method.id;
+
+                  return (
+                    <TouchableOpacity
+                      key={method.id}
+                      style={[
+                        styles.methodCard,
+                        selected && styles.methodCardActive,
+                      ]}
+                      activeOpacity={0.8}
+                      disabled={processing}
+                      onPress={() => setSelectedMethod(method.id)}
+                    >
+                      <View style={styles.methodIcon}>
+                        <MaterialIcons
+                          name={method.icon}
+                          size={21}
+                          color="#003366"
+                        />
+                      </View>
+
+                      <View style={styles.methodText}>
+                        <Text style={styles.methodTitle}>{method.title}</Text>
+                        <Text style={styles.methodDescription}>
+                          {method.description}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.methodRadio,
+                          selected && styles.methodRadioActive,
+                        ]}
+                      >
+                        {selected && <View style={styles.methodRadioInner} />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                <Text style={styles.simulationNote}>
+                  Simulation only: no real money will be taken.
+                </Text>
+
+                <TouchableOpacity
+                  style={[
+                    styles.payButton,
+                    processing && styles.payButtonDisabled,
+                  ]}
+                  activeOpacity={0.8}
+                  disabled={processing}
+                  onPress={confirmPayment}
+                >
+                  {processing ? (
+                    <>
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                      <Text style={styles.payButtonText}>Processing...</Text>
+                    </>
+                  ) : (
+                    <>
+                      <MaterialIcons name="lock" size={18} color="#FFFFFF" />
+                      <Text style={styles.payButtonText}>
+                        Pay {formatCurrency(getAmount(payingFine))}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  activeOpacity={0.8}
+                  disabled={processing}
+                  onPress={closePaymentModal}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1040,103 +921,55 @@ function renderFineCard({
   handlePay,
 }: {
   fine: DisplayFine;
-
-  formatCurrency: (
-    amount: number
-  ) => string;
-
-  formatDate: (
-    date?: string | any
-  ) => string;
-
-  getReference: (
-    fine: FirestoreFine
-  ) => string;
-
-  getAmount: (
-    fine: FirestoreFine
-  ) => number;
-
-  handlePay: (
-    fine: DisplayFine
-  ) => void;
+  formatCurrency: (amount: number) => string;
+  formatDate: (date?: string | any) => string;
+  getReference: (fine: FirestoreFine) => string;
+  getAmount: (fine: FirestoreFine) => number;
+  handlePay: (fine: DisplayFine) => void;
 }) {
-  const isOverdue =
-    fine.displayStatus ===
-    "Overdue";
+  const isOverdue = fine.displayStatus === "Overdue";
 
-  const offence =
-    fine.offence ??
-    fine.description ??
-    "Traffic violation";
+  const offence = fine.offence ?? fine.description ?? "Traffic violation";
 
-  const reference =
-    getReference(fine);
+  const reference = getReference(fine);
 
-  const amount =
-    getAmount(fine);
+  const amount = getAmount(fine);
 
-  const date =
-    fine.offenceDate ??
-    fine.date ??
-    fine.issuedAt;
+  const date = fine.offenceDate ?? fine.date ?? fine.issuedAt;
 
   return (
-    <View
-      key={fine.id}
-      style={styles.fineCard}
-    >
+    <View key={fine.id} style={styles.fineCard}>
       {/* HEADER */}
 
       <View style={styles.fineHeader}>
         <View style={styles.fineTitleRow}>
           <View style={styles.fineIcon}>
             <MaterialIcons
-              name={
-                fine.type ===
-                "speed_camera"
-                  ? "speed"
-                  : "gavel"
-              }
+              name={fine.type === "speed_camera" ? "speed" : "gavel"}
               size={21}
               color="#003366"
             />
           </View>
 
-          <View
-            style={
-              styles.fineTitleContainer
-            }
-          >
-            <Text
-              style={styles.fineTitle}
-              numberOfLines={2}
-            >
+          <View style={styles.fineTitleContainer}>
+            <Text style={styles.fineTitle} numberOfLines={2}>
               {offence}
             </Text>
 
-            <Text
-              style={styles.reference}
-            >
-              {reference}
-            </Text>
+            <Text style={styles.reference}>{reference}</Text>
           </View>
         </View>
 
         <View
           style={[
             styles.statusBadge,
-            isOverdue
-              ? styles.overdueBadge
-              : styles.outstandingBadge,
+            isOverdue ? styles.overdueBadge : styles.outstandingBadge,
           ]}
         >
           <Text
             style={[
               styles.statusText,
-              isOverdue
-                ? styles.overdueText
-                : styles.outstandingText,
+              isOverdue ? styles.overdueText : styles.outstandingText,
             ]}
           >
             {fine.displayStatus}
@@ -1144,40 +977,22 @@ function renderFineCard({
         </View>
       </View>
 
-      {/* DIVIDER */}
-
       <View style={styles.divider} />
 
       {/* DETAILS */}
 
       <View style={styles.detailRow}>
         <View style={styles.detailItem}>
-          <Text
-            style={styles.detailLabel}
-          >
-            DATE
-          </Text>
+          <Text style={styles.detailLabel}>DATE</Text>
 
-          <Text
-            style={styles.detailValue}
-          >
-            {formatDate(date)}
-          </Text>
+          <Text style={styles.detailValue}>{formatDate(date)}</Text>
         </View>
 
         <View style={styles.detailItem}>
-          <Text
-            style={styles.detailLabel}
-          >
-            VEHICLE
-          </Text>
+          <Text style={styles.detailLabel}>VEHICLE</Text>
 
-          <Text
-            style={styles.detailValue}
-            numberOfLines={1}
-          >
-            {fine.registrationNumber ??
-              "Not specified"}
+          <Text style={styles.detailValue} numberOfLines={1}>
+            {fine.registrationNumber ?? "Not specified"}
           </Text>
         </View>
       </View>
@@ -1185,62 +1000,29 @@ function renderFineCard({
       {/* LOCATION */}
 
       <View style={styles.locationRow}>
-        <MaterialIcons
-          name="location-on"
-          size={17}
-          color="#777"
-        />
+        <MaterialIcons name="location-on" size={17} color="#777" />
 
-        <Text
-          style={styles.locationText}
-          numberOfLines={2}
-        >
-          {fine.location ??
-            fine.cameraLocation ??
-            "Location unavailable"}
+        <Text style={styles.locationText} numberOfLines={2}>
+          {fine.location ?? fine.cameraLocation ?? "Location unavailable"}
         </Text>
       </View>
 
       {/* SPEED INFORMATION */}
 
-      {fine.type ===
-        "speed_camera" && (
+      {fine.type === "speed_camera" && (
         <View style={styles.speedRow}>
           <View>
-            <Text
-              style={
-                styles.speedLabel
-              }
-            >
-              RECORDED SPEED
-            </Text>
+            <Text style={styles.speedLabel}>RECORDED SPEED</Text>
 
-            <Text
-              style={styles.speedValue}
-            >
-              {fine.recordedSpeed ??
-                fine.speed ??
-                "--"}{" "}
-              km/h
+            <Text style={styles.speedValue}>
+              {fine.recordedSpeed ?? fine.speed ?? "--"} km/h
             </Text>
           </View>
 
           <View>
-            <Text
-              style={
-                styles.speedLabel
-              }
-            >
-              SPEED LIMIT
-            </Text>
+            <Text style={styles.speedLabel}>SPEED LIMIT</Text>
 
-            <Text
-              style={styles.speedValue}
-            >
-              {fine.speedLimit ??
-                "--"}{" "}
-              km/h
-            </Text>
+            <Text style={styles.speedValue}>{fine.speedLimit ?? "--"} km/h</Text>
           </View>
         </View>
       )}
@@ -1249,27 +1031,14 @@ function renderFineCard({
 
       <View style={styles.amountRow}>
         <View>
-          <Text
-            style={styles.amountLabel}
-          >
-            Amount Due
-          </Text>
+          <Text style={styles.amountLabel}>Amount Due</Text>
 
           {fine.dueDate && (
-            <Text
-              style={styles.dueDate}
-            >
-              Due{" "}
-              {formatDate(
-                fine.dueDate
-              )}
-            </Text>
+            <Text style={styles.dueDate}>Due {formatDate(fine.dueDate)}</Text>
           )}
         </View>
 
-        <Text style={styles.amount}>
-          {formatCurrency(amount)}
-        </Text>
+        <Text style={styles.amount}>{formatCurrency(amount)}</Text>
       </View>
 
       {/* PAY BUTTON */}
@@ -1277,27 +1046,13 @@ function renderFineCard({
       <TouchableOpacity
         style={styles.payButton}
         activeOpacity={0.8}
-        onPress={() =>
-          handlePay(fine)
-        }
+        onPress={() => handlePay(fine)}
       >
-        <MaterialIcons
-          name="payments"
-          size={19}
-          color="#FFFFFF"
-        />
+        <MaterialIcons name="payments" size={19} color="#FFFFFF" />
 
-        <Text
-          style={styles.payButtonText}
-        >
-          Pay Now
-        </Text>
+        <Text style={styles.payButtonText}>Pay Now</Text>
 
-        <Ionicons
-          name="arrow-forward"
-          size={18}
-          color="#FFFFFF"
-        />
+        <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
       </TouchableOpacity>
     </View>
   );
@@ -1318,9 +1073,7 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
 
-  /* =====================================================
-     LOADING
-  ===================================================== */
+  /* LOADING */
 
   loadingContainer: {
     flex: 1,
@@ -1356,9 +1109,7 @@ const styles = StyleSheet.create({
     color: "#777",
   },
 
-  /* =====================================================
-     HEADER
-  ===================================================== */
+  /* HEADER */
 
   header: {
     marginTop: 8,
@@ -1401,9 +1152,7 @@ const styles = StyleSheet.create({
     color: "#666",
   },
 
-  /* =====================================================
-     ACCOUNT
-  ===================================================== */
+  /* ACCOUNT */
 
   accountCard: {
     backgroundColor: "#FFFFFF",
@@ -1416,10 +1165,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
   },
 
   accountIcon: {
@@ -1472,9 +1218,7 @@ const styles = StyleSheet.create({
     marginLeft: 3,
   },
 
-  /* =====================================================
-     SUMMARY
-  ===================================================== */
+  /* SUMMARY */
 
   summaryCard: {
     backgroundColor: "#FFFFFF",
@@ -1487,10 +1231,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.06,
     shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
   },
 
   summaryIcon: {
@@ -1525,9 +1266,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  /* =====================================================
-     STATS
-  ===================================================== */
+  /* STATS */
 
   statsRow: {
     flexDirection: "row",
@@ -1592,9 +1331,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  /* =====================================================
-     INFO
-  ===================================================== */
+  /* INFO */
 
   infoCard: {
     backgroundColor: "#EAF1F7",
@@ -1613,9 +1350,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  /* =====================================================
-     SECTION
-  ===================================================== */
+  /* SECTION */
 
   sectionHeader: {
     flexDirection: "row",
@@ -1644,9 +1379,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
 
-  /* =====================================================
-     FINE CARD
-  ===================================================== */
+  /* FINE CARD */
 
   fineCard: {
     backgroundColor: "#FFFFFF",
@@ -1657,10 +1390,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
   },
 
   fineHeader: {
@@ -1735,9 +1465,7 @@ const styles = StyleSheet.create({
     marginVertical: 14,
   },
 
-  /* =====================================================
-     DETAILS
-  ===================================================== */
+  /* DETAILS */
 
   detailRow: {
     flexDirection: "row",
@@ -1775,9 +1503,7 @@ const styles = StyleSheet.create({
     marginLeft: 5,
   },
 
-  /* =====================================================
-     SPEED
-  ===================================================== */
+  /* SPEED */
 
   speedRow: {
     backgroundColor: "#F7F8FA",
@@ -1802,9 +1528,7 @@ const styles = StyleSheet.create({
     color: "#003366",
   },
 
-  /* =====================================================
-     AMOUNT
-  ===================================================== */
+  /* AMOUNT */
 
   amountRow: {
     backgroundColor: "#F7F8FA",
@@ -1833,9 +1557,7 @@ const styles = StyleSheet.create({
     color: "#003366",
   },
 
-  /* =====================================================
-     BUTTON
-  ===================================================== */
+  /* BUTTONS */
 
   payButton: {
     backgroundColor: "#003366",
@@ -1854,9 +1576,191 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
 
-  /* =====================================================
-     EMPTY
-  ===================================================== */
+  payButtonDisabled: {
+    opacity: 0.6,
+  },
+
+  cancelButton: {
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+
+  cancelButtonText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#777",
+  },
+
+  /* PAYMENT SHEET */
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+
+  modalSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: 20,
+    paddingBottom: 30,
+  },
+
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#003366",
+    textAlign: "center",
+  },
+
+  modalSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#777",
+    textAlign: "center",
+    marginTop: 6,
+    marginBottom: 16,
+  },
+
+  modalAmountBox: {
+    backgroundColor: "#F7F8FA",
+    borderRadius: 13,
+    padding: 16,
+    alignItems: "center",
+    marginBottom: 18,
+  },
+
+  modalAmountLabel: {
+    fontSize: 12,
+    color: "#777",
+  },
+
+  modalAmount: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: "#003366",
+    marginTop: 4,
+  },
+
+  methodHeading: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    color: "#888",
+    marginBottom: 8,
+  },
+
+  methodCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E3E7EB",
+    borderRadius: 12,
+    marginBottom: 9,
+  },
+
+  methodCardActive: {
+    borderColor: "#003366",
+    backgroundColor: "#EAF1F7",
+  },
+
+  methodIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: "#EAF1F7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 11,
+  },
+
+  methodText: {
+    flex: 1,
+  },
+
+  methodTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#222",
+  },
+
+  methodDescription: {
+    fontSize: 11,
+    color: "#777",
+    marginTop: 2,
+  },
+
+  methodRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#B8C2CB",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  methodRadioActive: {
+    borderColor: "#003366",
+  },
+
+  methodRadioInner: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#003366",
+  },
+
+  simulationNote: {
+    fontSize: 11,
+    color: "#999",
+    textAlign: "center",
+    marginTop: 6,
+    marginBottom: 14,
+  },
+
+  successIcon: {
+    alignItems: "center",
+    marginBottom: 8,
+  },
+
+  receiptBox: {
+    backgroundColor: "#F7F8FA",
+    borderRadius: 13,
+    padding: 14,
+    marginTop: 4,
+  },
+
+  receiptRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 7,
+  },
+
+  receiptLabel: {
+    fontSize: 12,
+    color: "#777",
+  },
+
+  receiptValue: {
+    flex: 1,
+    textAlign: "right",
+    marginLeft: 14,
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#222",
+  },
+
+  receiptValueBig: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#2E7D32",
+  },
+
+  /* EMPTY */
 
   emptyCard: {
     backgroundColor: "#FFFFFF",
@@ -1890,9 +1794,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
-  /* =====================================================
-     DATA FOOTER
-  ===================================================== */
+  /* DATA FOOTER */
 
   dataFooter: {
     flexDirection: "row",
@@ -1907,9 +1809,7 @@ const styles = StyleSheet.create({
     marginLeft: 5,
   },
 
-  /* =====================================================
-     FOOTER
-  ===================================================== */
+  /* FOOTER */
 
   footer: {
     flexDirection: "row",

@@ -46,7 +46,6 @@ export default function MyLicensesScreen() {
   const { user } = useAuth();
 
   const vehicles = user?.vehicles ?? [];
-
   const driverLicense = user?.driverLicense;
 
   const validDriverLicense =
@@ -61,9 +60,7 @@ export default function MyLicensesScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.container}
       >
-        {/* =================================================
-            HEADER
-        ================================================= */}
+        {/* HEADER */}
 
         <View style={styles.header}>
           <View style={styles.headerIcon}>
@@ -90,9 +87,7 @@ export default function MyLicensesScreen() {
           </View>
         </View>
 
-        {/* =================================================
-            ACCOUNT SUMMARY
-        ================================================= */}
+        {/* ACCOUNT SUMMARY */}
 
         <View style={styles.summaryCard}>
           <View style={styles.summaryTop}>
@@ -148,9 +143,7 @@ export default function MyLicensesScreen() {
           </View>
         </View>
 
-        {/* =================================================
-            DRIVER LICENCE
-        ================================================= */}
+        {/* DRIVER LICENCE */}
 
         <SectionHeader
           title="Driver's Licence"
@@ -174,16 +167,12 @@ export default function MyLicensesScreen() {
               </Text>
 
               <Text style={styles.licenseNumber}>
-                {driverLicense?.number ??
-                  "Not available"}
+                {driverLicense?.number ?? "Not available"}
               </Text>
             </View>
 
             <StatusBadge
-              label={
-                driverLicense?.status ??
-                "Unknown"
-              }
+              label={driverLicense?.status ?? "Unknown"}
               type={
                 validDriverLicense
                   ? "success"
@@ -197,50 +186,32 @@ export default function MyLicensesScreen() {
           <View style={styles.infoGrid}>
             <InfoItem
               label="Licence Number"
-              value={
-                driverLicense?.number ??
-                "Not available"
-              }
+              value={driverLicense?.number ?? "Not available"}
             />
 
             <InfoItem
               label="Card Number"
-              value={
-                driverLicense?.cardNumber ??
-                "Not available"
-              }
+              value={driverLicense?.cardNumber ?? "Not available"}
             />
 
             <InfoItem
               label="Licence Class"
-              value={
-                driverLicense?.class ??
-                "Not available"
-              }
+              value={driverLicense?.class ?? "Not available"}
             />
 
             <InfoItem
               label="Issue Date"
-              value={
-                driverLicense?.issueDate ??
-                "Not available"
-              }
+              value={driverLicense?.issueDate ?? "Not available"}
             />
 
             <InfoItem
               label="Expiry Date"
-              value={
-                driverLicense?.expiryDate ??
-                "Not available"
-              }
+              value={driverLicense?.expiryDate ?? "Not available"}
             />
 
             <InfoItem
               label="Status"
-              value={
-                driverLicense?.status ??
-                "Unknown"
-              }
+              value={driverLicense?.status ?? "Unknown"}
               valueType={
                 validDriverLicense
                   ? "success"
@@ -260,29 +231,13 @@ export default function MyLicensesScreen() {
         />
 
         <ActionItem
-          icon="qr-code-outline"
-          title="QR Code"
-          description="Display your licence verification QR code."
-          screen="QRCode"
-        />
-
-        <ActionItem
-          icon="radio-outline"
-          title="NFC Verification"
-          description="Verify your licence using NFC."
-          screen="NFCVerification"
-        />
-
-        <ActionItem
           icon="refresh-outline"
           title="Renew Driver's Licence"
           description="Start the process to renew your driving licence."
           screen="RenewDriverLicense"
         />
 
-        {/* =================================================
-            VEHICLES
-        ================================================= */}
+        {/* REGISTERED VEHICLES */}
 
         <SectionHeader
           title="Registered Vehicles"
@@ -390,26 +345,17 @@ export default function MyLicensesScreen() {
               <View style={styles.vehicleDetails}>
                 <VehicleDetail
                   label="VIN"
-                  value={
-                    vehicle.vin ||
-                    "Not available"
-                  }
+                  value={vehicle.vin || "Not available"}
                 />
 
                 <VehicleDetail
                   label="Engine Number"
-                  value={
-                    vehicle.engineNumber ||
-                    "Not available"
-                  }
+                  value={vehicle.engineNumber || "Not available"}
                 />
 
                 <VehicleDetail
                   label="Licence Disc"
-                  value={
-                    vehicle.licenceDisk?.number ||
-                    "Not available"
-                  }
+                  value={vehicle.licenceDisk?.number || "Not available"}
                 />
 
                 <VehicleDetail
@@ -469,7 +415,7 @@ export default function MyLicensesScreen() {
           </View>
         )}
 
-        {/* VEHICLE ACTIONS */}
+        {/* REMAINING VEHICLE ACTION */}
 
         <ActionItem
           icon="information-circle-outline"
@@ -478,23 +424,7 @@ export default function MyLicensesScreen() {
           screen="VehicleInformation"
         />
 
-        <ActionItem
-          icon="refresh-outline"
-          title="Renew Vehicle Licence"
-          description="Renew the licence disc for your registered vehicle."
-          screen="RenewVehicleLicense"
-        />
-
-        <ActionItem
-          icon="swap-horizontal-outline"
-          title="Change Vehicle Ownership"
-          description="Apply to transfer a vehicle to another registered owner."
-          screen="ChangeOwnership"
-        />
-
-        {/* =================================================
-            COLLECTION
-        ================================================= */}
+        {/* LICENCE COLLECTION */}
 
         <SectionHeader
           title="Licence Collection"
@@ -518,15 +448,13 @@ export default function MyLicensesScreen() {
               </Text>
 
               <Text style={styles.collectionDescription}>
-                Current status of your physical
-                licence card.
+                Current status of your physical licence card.
               </Text>
             </View>
 
             <StatusBadge
               label={
-                user?.collection?.productionStatus ??
-                "Unknown"
+                user?.collection?.productionStatus ?? "Unknown"
               }
               type={
                 collectionReady
@@ -541,11 +469,7 @@ export default function MyLicensesScreen() {
           <CollectionRow
             icon="checkmark-circle-outline"
             label="Ready for Collection"
-            value={
-              collectionReady
-                ? "Ready"
-                : "Not Ready"
-            }
+            value={collectionReady ? "Ready" : "Not Ready"}
             type={
               collectionReady
                 ? "success"
@@ -557,15 +481,12 @@ export default function MyLicensesScreen() {
             icon="location-outline"
             label="Collection Centre"
             value={
-              user?.collection?.location ??
-              "Not available"
+              user?.collection?.location ?? "Not available"
             }
           />
         </View>
 
-        {/* =================================================
-            ACCOUNT NOTICE
-        ================================================= */}
+        {/* ACCOUNT NOTICE */}
 
         <View style={styles.notice}>
           <Ionicons
@@ -750,9 +671,7 @@ function ActionItem({
     <TouchableOpacity
       style={styles.actionItem}
       activeOpacity={0.8}
-      onPress={() =>
-        navigation.navigate(screen)
-      }
+      onPress={() => navigation.navigate(screen)}
     >
       <View style={styles.actionIcon}>
         <Ionicons
@@ -866,13 +785,12 @@ const styles = StyleSheet.create({
   },
 
   container: {
-  paddingHorizontal: 15,
-  paddingTop: 50,
-  paddingBottom: 60,
-},
-  /* =======================================================
-     HEADER
-  ======================================================= */
+    paddingHorizontal: 15,
+    paddingTop: 50,
+    paddingBottom: 60,
+  },
+
+  /* HEADER */
 
   header: {
     flexDirection: "row",
@@ -915,9 +833,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  /* =======================================================
-     SUMMARY
-  ======================================================= */
+  /* SUMMARY */
 
   summaryCard: {
     backgroundColor: COLORS.card,
@@ -1002,9 +918,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.border,
   },
 
-  /* =======================================================
-     SECTION
-  ======================================================= */
+  /* SECTION */
 
   sectionHeader: {
     flexDirection: "row",
@@ -1039,9 +953,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  /* =======================================================
-     DRIVER LICENCE
-  ======================================================= */
+  /* DRIVER LICENCE */
 
   licenseCard: {
     backgroundColor: COLORS.card,
@@ -1123,9 +1035,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  /* =======================================================
-     ACTIONS
-  ======================================================= */
+  /* ACTIONS */
 
   actionItem: {
     flexDirection: "row",
@@ -1166,9 +1076,7 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
-  /* =======================================================
-     OWNERSHIP
-  ======================================================= */
+  /* OWNERSHIP */
 
   ownershipCard: {
     flexDirection: "row",
@@ -1209,9 +1117,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
 
-  /* =======================================================
-     VEHICLES
-  ======================================================= */
+  /* VEHICLES */
 
   vehicleCard: {
     backgroundColor: COLORS.card,
@@ -1342,9 +1248,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
 
-  /* =======================================================
-     COLLECTION
-  ======================================================= */
+  /* COLLECTION */
 
   collectionCard: {
     backgroundColor: COLORS.card,
@@ -1407,9 +1311,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
 
-  /* =======================================================
-     NOTICE
-  ======================================================= */
+  /* NOTICE */
 
   notice: {
     flexDirection: "row",
@@ -1430,4 +1332,3 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
 });
-

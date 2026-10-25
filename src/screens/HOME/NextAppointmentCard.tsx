@@ -5,6 +5,8 @@ import React, {
   useState,
 } from "react";
 
+import { useFocusEffect } from "@react-navigation/native";
+
 import {
   ActivityIndicator,
   StyleSheet,
@@ -136,9 +138,15 @@ export default function NextAppointmentCard({
      INITIAL LOAD
   ======================================================= */
 
-  useEffect(() => {
+ useFocusEffect(
+  useCallback(() => {
+    console.log(
+      "[NextAppointmentCard] Home screen focused. Refreshing appointments..."
+    );
+
     loadAppointments();
-  }, [loadAppointments]);
+  }, [loadAppointments])
+);
 
   /* =======================================================
      LIVE CLOCK

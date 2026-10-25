@@ -18,7 +18,7 @@ export type CitizenFine = {
   id: string;
   ticketId: string;
   reference: string;
-
+  email?: string;
   type: string;
   category: string;
 
@@ -91,8 +91,9 @@ export type CitizenVehicle = {
 ========================================================= */
 
 export type CitizenUser = {
+   id: string;
   phone: string;
-
+ 
   verified: boolean;
 
   fullName?: string;
@@ -386,6 +387,7 @@ export const AuthProvider = ({
 
       setUser({
         ...data,
+         id: snap.id,
         fines,
       });
 

@@ -25,6 +25,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   cancelAppointment,
   getMyAppointments,
+  APPOINTMENT_PENALTY_AMOUNT,
 } from "../../services/appointmentService";
 
 import type {
@@ -59,7 +60,7 @@ export default function MyAppointments() {
   const loadAppointments = useCallback(
     async (refresh = false) => {
       console.log("========================================");
-      console.log("📅 [MyAppointments] LOAD START");
+      console.log("[MyAppointments] LOAD START");
       console.log("========================================");
 
       try {
@@ -73,10 +74,7 @@ export default function MyAppointments() {
 
         const userId = await AsyncStorage.getItem("userId");
 
-        console.log(
-          "[MyAppointments] userId:",
-          userId
-        );
+        console.log("[MyAppointments] userId:", userId);
 
         if (!userId) {
           throw new Error("No logged-in citizen found.");
@@ -85,7 +83,7 @@ export default function MyAppointments() {
         const result = await getMyAppointments(userId);
 
         console.log(
-          "[MyAppointments] appointments:",
+          "[MyAppointments] Appointments:",
           result.length
         );
 
@@ -96,16 +94,10 @@ export default function MyAppointments() {
           err
         );
 
-        setError(
-          "We couldn't load your appointments."
-        );
+        setError("We couldn't load your appointments.");
       } finally {
         setLoading(false);
         setRefreshing(false);
-
-        console.log(
-          "[MyAppointments] LOAD FINISHED"
-        );
       }
     },
     []
@@ -123,99 +115,189 @@ export default function MyAppointments() {
      FILTER APPOINTMENTS
   ======================================================= */
 
-  const upcomingAppointments = useMemo(() => {
-    return appointments.filter(
-      (appointment) =>
-        appointment.status === "confirmed" ||
-        appointment.status === "pending"
-    );
-  }, [appointments]);
+  const upcomingAppointments = useMemo(
+    () =>
+      appointments.filter(
+        (appointment) =>
+          appointment.status === "confirmed" ||
+          appointment.status === "pending"
+      ),
+    [appointments]
+  );
 
-  const previousAppointments = useMemo(() => {
-    return appointments.filter(
-      (appointment) =>
-        appointment.status === "completed" ||
-        appointment.status === "cancelled"
-    );
-  }, [appointments]);
+  const previousAppointments = useMemo(
+    () =>
+      appointments.filter(
+        (appointment) =>
+          appointment.status === "completed" ||
+          appointment.status === "cancelled"
+      ),
+    [appointments]
+  );
 
   /* =======================================================
      CANCEL APPOINTMENT
   ======================================================= */
 
-  const handleCancel = (
-    appointment: FirestoreAppointment
-  ) => {
-    Alert.alert(
-      "Cancel Appointment",
-      "Are you sure you want to cancel this appointment?",
-      [
-        {
-          text: "Keep Appointment",
-          style: "cancel",
-        },
-        {
-          text: "Cancel Appointment",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              setCancelling(true);
+  const handleCancel = useCallback(
+    (appointment: FirestoreAppointment) => {
+      if (cancelling) {
+        return;
+      }
 
-              console.log(
-                "[MyAppointments] Cancelling:",
-                appointment.id
-              );
+      if (
+        appointment.status !== "confirmed" &&
+        appointment.status !== "pending"
+      ) {
+        Alert.alert(
+          "Cannot Cancel",
+          "Only pending or confirmed appointments can be cancelled."
+        );
+        return;
+      }
 
-              await cancelAppointment(
-                appointment.id
-              );
+      const reasons = [
+        "Unable to attend",
+        "Change of plans",
+        "Booked by mistake",
+        "Other reason",
+      ];
 
-              console.log(
-                "[MyAppointments] ✅ Appointment cancelled"
-              );
+      Alert.alert(
+        "Cancellation Reason",
+        "Why do you want to cancel this appointment?",
+        [
+          ...reasons.map((reason) => ({
+            text: reason,
+            onPress: () => {
+              // Generate the action ID once for this confirmed attempt.
+              const actionId =
+                `cancel_${appointment.id}_${Date.now()}`;
 
-              setAppointments((current) =>
-                current.map((item) =>
-                  item.id === appointment.id
-                    ? {
-                        ...item,
-                        status: "cancelled",
+              Alert.alert(
+                "Confirm Cancellation",
+                `Appointment: ${appointment.appointmentNumber}\n\nReason: ${reason}\n\nPenalty: R${APPOINTMENT_PENALTY_AMOUNT.toFixed(
+                  2
+                )}\n\nThis penalty will be added to your outstanding balance. Do you want to continue?`,
+                [
+                  {
+                    text: "Keep Appointment",
+                    style: "cancel" as const,
+                  },
+                  {
+                    text: "Cancel & Accept Fee",
+                    style: "destructive" as const,
+                    onPress: async () => {
+                      if (cancelling) {
+                        return;
                       }
-                    : item
-                )
-              );
 
-              setSelectedAppointment((current) =>
-                current?.id === appointment.id
-                  ? {
-                      ...current,
-                      status: "cancelled",
-                    }
-                  : current
-              );
+                      try {
+                        setCancelling(true);
 
-              Alert.alert(
-                "Appointment Cancelled",
-                "Your appointment has been cancelled."
-              );
-            } catch (error) {
-              console.error(
-                "[MyAppointments] CANCEL ERROR:",
-                error
-              );
+                        const userId =
+                          await AsyncStorage.getItem("userId");
 
-              Alert.alert(
-                "Error",
-                "We couldn't cancel this appointment."
+                        if (!userId) {
+                          throw new Error(
+                            "No logged-in citizen found. Please sign in again."
+                          );
+                        }
+
+                        console.log(
+                          "[MyAppointments] CANCELLATION REQUEST",
+                          {
+                            appointmentId: appointment.id,
+                            appointmentNumber:
+                              appointment.appointmentNumber,
+                            userId,
+                            actionId,
+                            reason,
+                            penalty:
+                              APPOINTMENT_PENALTY_AMOUNT,
+                          }
+                        );
+
+                        await cancelAppointment({
+                          appointmentId: appointment.id,
+                          userId,
+
+                          // IMPORTANT:
+                          // This assumes userId is the same document ID
+                          // as citizens/{citizenId}.
+                          // Verify this against your AuthContext.
+                          citizenId: userId,
+
+                          reason,
+                          actionId,
+                        });
+
+                        setAppointments((current) =>
+                          current.map((item) =>
+                            item.id === appointment.id
+                              ? {
+                                  ...item,
+                                  status: "cancelled",
+                                }
+                              : item
+                          )
+                        );
+
+                        setSelectedAppointment((current) =>
+                          current?.id === appointment.id
+                            ? {
+                                ...current,
+                                status: "cancelled",
+                              }
+                            : current
+                        );
+
+                        console.log(
+                          "[MyAppointments] CANCELLATION SUCCESS",
+                          {
+                            appointmentId: appointment.id,
+                            actionId,
+                            penalty:
+                              APPOINTMENT_PENALTY_AMOUNT,
+                          }
+                        );
+
+                        Alert.alert(
+                          "Appointment Cancelled",
+                          `Your appointment has been cancelled successfully.\n\nPenalty added: R${APPOINTMENT_PENALTY_AMOUNT.toFixed(
+                            2
+                          )}\n\nReason: ${reason}\n\nThe penalty is now recorded as outstanding.`
+                        );
+                      } catch (err) {
+                        console.error(
+                          "[MyAppointments] CANCELLATION ERROR:",
+                          err
+                        );
+
+                        Alert.alert(
+                          "Cancellation Failed",
+                          err instanceof Error
+                            ? err.message
+                            : "We couldn't cancel your appointment. Please try again."
+                        );
+                      } finally {
+                        setCancelling(false);
+                      }
+                    },
+                  },
+                ]
               );
-            } finally {
-              setCancelling(false);
-            }
+            },
+          })),
+          {
+            text: "Go Back",
+            style: "cancel",
           },
-        },
-      ]
-    );
-  };
+        ]
+      );
+    },
+    [cancelling]
+  );
 
   /* =======================================================
      LOADING
@@ -224,9 +306,7 @@ export default function MyAppointments() {
   if (loading) {
     return (
       <SafeAreaView style={styles.screen}>
-        <Header
-          onBack={() => navigation.goBack()}
-        />
+        <Header onBack={() => navigation.goBack()} />
 
         <View style={styles.centerState}>
           <View style={styles.stateIcon}>
@@ -262,9 +342,7 @@ export default function MyAppointments() {
   if (error) {
     return (
       <SafeAreaView style={styles.screen}>
-        <Header
-          onBack={() => navigation.goBack()}
-        />
+        <Header onBack={() => navigation.goBack()} />
 
         <View style={styles.centerState}>
           <View style={styles.errorIcon}>
@@ -309,13 +387,7 @@ export default function MyAppointments() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      {/* HEADER */}
-
-      <Header
-        onBack={() => navigation.goBack()}
-      />
-
-      {/* CONTENT */}
+      <Header onBack={() => navigation.goBack()} />
 
       <ScrollView
         style={styles.scroll}
@@ -355,15 +427,11 @@ export default function MyAppointments() {
               {appointments.length}
             </Text>
 
-            <Text style={styles.totalLabel}>
-              Total
-            </Text>
+            <Text style={styles.totalLabel}>Total</Text>
           </View>
         </View>
 
-        {/* =================================================
-            UPCOMING
-        ================================================= */}
+        {/* UPCOMING */}
 
         <SectionHeader
           title="Upcoming"
@@ -377,24 +445,16 @@ export default function MyAppointments() {
             description="You don't have any upcoming appointments."
           />
         ) : (
-          upcomingAppointments.map(
-            (appointment) => (
-              <AppointmentCard
-                key={appointment.id}
-                appointment={appointment}
-                onPress={() =>
-                  setSelectedAppointment(
-                    appointment
-                  )
-                }
-              />
-            )
-          )
+          upcomingAppointments.map((appointment) => (
+            <AppointmentCard
+              key={appointment.id}
+              appointment={appointment}
+              onPress={() => setSelectedAppointment(appointment)}
+            />
+          ))
         )}
 
-        {/* =================================================
-            PREVIOUS
-        ================================================= */}
+        {/* PREVIOUS */}
 
         <SectionHeader
           title="Previous"
@@ -408,24 +468,16 @@ export default function MyAppointments() {
             description="Completed and cancelled appointments will appear here."
           />
         ) : (
-          previousAppointments.map(
-            (appointment) => (
-              <AppointmentCard
-                key={appointment.id}
-                appointment={appointment}
-                onPress={() =>
-                  setSelectedAppointment(
-                    appointment
-                  )
-                }
-              />
-            )
-          )
+          previousAppointments.map((appointment) => (
+            <AppointmentCard
+              key={appointment.id}
+              appointment={appointment}
+              onPress={() => setSelectedAppointment(appointment)}
+            />
+          ))
         )}
 
-        {/* =================================================
-            BOOK BUTTON
-        ================================================= */}
+        {/* BOOK BUTTON */}
 
         <TouchableOpacity
           style={styles.bookButton}
@@ -461,25 +513,17 @@ export default function MyAppointments() {
           />
         </TouchableOpacity>
 
-        {/* Bottom breathing room */}
-
         <View style={styles.bottomSpace} />
       </ScrollView>
 
-      {/* ===================================================
-          DETAILS
-      =================================================== */}
+      {/* DETAILS */}
 
       {selectedAppointment && (
         <AppointmentDetails
           appointment={selectedAppointment}
           cancelling={cancelling}
-          onClose={() =>
-            setSelectedAppointment(null)
-          }
-          onCancel={() =>
-            handleCancel(selectedAppointment)
-          }
+          onClose={() => setSelectedAppointment(null)}
+          onCancel={() => handleCancel(selectedAppointment)}
         />
       )}
     </SafeAreaView>
@@ -535,14 +579,10 @@ function SectionHeader({
 }) {
   return (
     <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>
-        {title}
-      </Text>
+      <Text style={styles.sectionTitle}>{title}</Text>
 
       <View style={styles.countBadge}>
-        <Text style={styles.countText}>
-          {count}
-        </Text>
+        <Text style={styles.countText}>{count}</Text>
       </View>
     </View>
   );
@@ -559,9 +599,7 @@ function AppointmentCard({
   appointment: FirestoreAppointment;
   onPress: () => void;
 }) {
-  const status = getStatusStyle(
-    appointment.status
-  );
+  const status = getStatusStyle(appointment.status);
 
   return (
     <TouchableOpacity
@@ -589,23 +627,16 @@ function AppointmentCard({
           <View
             style={[
               styles.statusBadge,
-              {
-                backgroundColor:
-                  status.background,
-              },
+              { backgroundColor: status.background },
             ]}
           >
             <Text
               style={[
                 styles.statusText,
-                {
-                  color: status.text,
-                },
+                { color: status.text },
               ]}
             >
-              {formatStatus(
-                appointment.status
-              )}
+              {formatStatus(appointment.status)}
             </Text>
           </View>
         </View>
@@ -617,10 +648,7 @@ function AppointmentCard({
             color="#64748B"
           />
 
-          <Text
-            style={styles.infoText}
-            numberOfLines={1}
-          >
+          <Text style={styles.infoText} numberOfLines={1}>
             {appointment.branch.name}
           </Text>
         </View>
@@ -634,9 +662,7 @@ function AppointmentCard({
             />
 
             <Text style={styles.infoText}>
-              {formatDate(
-                appointment.date
-              )}
+              {formatDate(appointment.date)}
             </Text>
           </View>
 
@@ -692,9 +718,7 @@ function EmptyState({
         />
       </View>
 
-      <Text style={styles.emptyTitle}>
-        {title}
-      </Text>
+      <Text style={styles.emptyTitle}>{title}</Text>
 
       <Text style={styles.emptyDescription}>
         {description}
@@ -704,7 +728,7 @@ function EmptyState({
 }
 
 /* =========================================================
-   DETAILS
+   APPOINTMENT DETAILS
 ========================================================= */
 
 function AppointmentDetails({
@@ -718,9 +742,7 @@ function AppointmentDetails({
   onClose: () => void;
   onCancel: () => void;
 }) {
-  const status = getStatusStyle(
-    appointment.status
-  );
+  const status = getStatusStyle(appointment.status);
 
   const canCancel =
     appointment.status === "confirmed" ||
@@ -743,6 +765,7 @@ function AppointmentDetails({
           <TouchableOpacity
             style={styles.closeButton}
             onPress={onClose}
+            disabled={cancelling}
           >
             <Ionicons
               name="close"
@@ -752,34 +775,23 @@ function AppointmentDetails({
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-        >
+        <ScrollView showsVerticalScrollIndicator={false}>
           <View style={styles.modalStatusRow}>
-            <Text style={styles.modalLabel}>
-              Status
-            </Text>
+            <Text style={styles.modalLabel}>Status</Text>
 
             <View
               style={[
                 styles.statusBadgeLarge,
-                {
-                  backgroundColor:
-                    status.background,
-                },
+                { backgroundColor: status.background },
               ]}
             >
               <Text
                 style={[
                   styles.statusTextLarge,
-                  {
-                    color: status.text,
-                  },
+                  { color: status.text },
                 ]}
               >
-                {formatStatus(
-                  appointment.status
-                )}
+                {formatStatus(appointment.status)}
               </Text>
             </View>
           </View>
@@ -807,9 +819,7 @@ function AppointmentDetails({
           <DetailRow
             icon="calendar-outline"
             label="Date"
-            value={formatDate(
-              appointment.date
-            )}
+            value={formatDate(appointment.date)}
           />
 
           <DetailRow
@@ -848,7 +858,10 @@ function AppointmentDetails({
 
           {canCancel && (
             <TouchableOpacity
-              style={styles.cancelButton}
+              style={[
+                styles.cancelButton,
+                cancelling && styles.cancelButtonDisabled,
+              ]}
               disabled={cancelling}
               onPress={onCancel}
               activeOpacity={0.8}
@@ -905,13 +918,9 @@ function DetailRow({
       </View>
 
       <View style={styles.detailInformation}>
-        <Text style={styles.detailLabel}>
-          {label}
-        </Text>
+        <Text style={styles.detailLabel}>{label}</Text>
 
-        <Text style={styles.detailValue}>
-          {value}
-        </Text>
+        <Text style={styles.detailValue}>{value}</Text>
       </View>
     </View>
   );
@@ -921,30 +930,22 @@ function DetailRow({
    STATUS
 ========================================================= */
 
-function formatStatus(
-  status: AppointmentStatus
-) {
+function formatStatus(status: AppointmentStatus) {
   switch (status) {
     case "confirmed":
       return "Confirmed";
-
     case "pending":
       return "Pending";
-
     case "completed":
       return "Completed";
-
     case "cancelled":
       return "Cancelled";
-
     default:
       return status;
   }
 }
 
-function getStatusStyle(
-  status: AppointmentStatus
-) {
+function getStatusStyle(status: AppointmentStatus) {
   switch (status) {
     case "confirmed":
       return {
@@ -987,22 +988,17 @@ function formatDate(date: string) {
     return "Unknown date";
   }
 
-  const parsed = new Date(
-    `${date}T00:00:00`
-  );
+  const parsed = new Date(`${date}T00:00:00`);
 
   if (Number.isNaN(parsed.getTime())) {
     return date;
   }
 
-  return parsed.toLocaleDateString(
-    "en-ZA",
-    {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    }
-  );
+  return parsed.toLocaleDateString("en-ZA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 /* =========================================================
@@ -1014,8 +1010,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F8FAFC",
   },
-
-  /* HEADER */
 
   header: {
     backgroundColor: "#FFFFFF",
@@ -1054,8 +1048,6 @@ const styles = StyleSheet.create({
     color: "#64748B",
   },
 
-  /* SCROLL */
-
   scroll: {
     flex: 1,
   },
@@ -1064,8 +1056,6 @@ const styles = StyleSheet.create({
     padding: 18,
     paddingBottom: 25,
   },
-
-  /* SUMMARY */
 
   summaryCard: {
     backgroundColor: "#2563EB",
@@ -1080,8 +1070,7 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 14,
-    backgroundColor:
-      "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.18)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1102,8 +1091,7 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 10,
     lineHeight: 15,
-    color:
-      "rgba(255,255,255,0.82)",
+    color: "rgba(255,255,255,0.82)",
   },
 
   totalBadge: {
@@ -1126,8 +1114,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#64748B",
   },
-
-  /* SECTIONS */
 
   sectionHeader: {
     flexDirection: "row",
@@ -1157,8 +1143,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: "#2563EB",
   },
-
-  /* CARD */
 
   card: {
     backgroundColor: "#FFFFFF",
@@ -1245,8 +1229,6 @@ const styles = StyleSheet.create({
     color: "#94A3B8",
   },
 
-  /* EMPTY */
-
   emptyState: {
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
@@ -1281,8 +1263,6 @@ const styles = StyleSheet.create({
     color: "#64748B",
   },
 
-  /* BOOK BUTTON */
-
   bookButton: {
     minHeight: 60,
     borderRadius: 16,
@@ -1297,8 +1277,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 11,
-    backgroundColor:
-      "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.18)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1317,15 +1296,12 @@ const styles = StyleSheet.create({
   bookSubtitle: {
     marginTop: 2,
     fontSize: 10,
-    color:
-      "rgba(255,255,255,0.78)",
+    color: "rgba(255,255,255,0.78)",
   },
 
   bottomSpace: {
     height: 10,
   },
-
-  /* LOADING / ERROR */
 
   centerState: {
     flex: 1,
@@ -1388,16 +1364,13 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 
-  /* MODAL */
-
   modalOverlay: {
     position: "absolute",
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor:
-      "rgba(15,23,42,0.48)",
+    backgroundColor: "rgba(15,23,42,0.48)",
     justifyContent: "flex-end",
   },
 
@@ -1532,6 +1505,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
+  },
+
+  cancelButtonDisabled: {
+    opacity: 0.6,
   },
 
   cancelButtonText: {

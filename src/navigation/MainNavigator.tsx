@@ -44,14 +44,14 @@ import DownloadReceiptsScreen from "../screens/PAYMENTS/download-receipts";
 import EmailReceiptsScreen from "../screens/PAYMENTS/email-receipts";
 
 /* =========================================================
-   SERVICES
+   SERVICESFF
 ========================================================= */
 
 //import AppointmentHistoryScreen from "../screens/SERVICES/AppointmentHistory";
 import AppointmentBooking from "../screens/SERVICES/AppointmentBooking";
 import MyAppointmentsScreen from "../screens/SERVICES/MyAppointments";
 import AppointmentHistoryScreen from "../screens/SERVICES/AppointmentHistory";
-
+import ApplicationHistoryScreen from "../screens/SERVICES/ApplicationHistoryScreen";
 
 import VehicleRegistrationScreen from "../screens/SERVICES/vehicle-registration";
 import ChangeOwnershipScreen from "../screens/SERVICES/change-ownership";
@@ -68,7 +68,7 @@ import VisionTestScreen from "../screens/SERVICES/VisionTestScreen";
 /* =========================================================
    Updates
 ========================================================= */
-import NavigationScreen from "../screens/Updates/NavigationScreen";
+
 
 /* =========================================================
    NAVIGATOR
@@ -95,11 +95,7 @@ export default function MainNavigator() {
         
       />
 
-<Stack.Screen
-  name="Navigation"
-  component={NavigationScreen}
-  
-/>
+
       {/* =====================================================
           HOME
       ===================================================== */}
@@ -327,7 +323,11 @@ export default function MainNavigator() {
         component={ApplicationsDashboardScreen}
         options={{ title: "Applications Dashboard" }}
       />
-
+<Stack.Screen
+  name="ApplicationHistory"
+  component={ApplicationHistoryScreen}
+  options={{ title: "Application History" }}
+/>
     </Stack.Navigator>
   );
 }

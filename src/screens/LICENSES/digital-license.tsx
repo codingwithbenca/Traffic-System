@@ -1,15 +1,20 @@
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   StatusBar,
+  Alert,
+  ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import QRCode from "react-native-qrcode-svg";
 import * as ScreenOrientation from "expo-screen-orientation";
+import * as MediaLibrary from "expo-media-library";
+import { captureRef } from "react-native-view-shot";
 import { useNavigation } from "@react-navigation/native";
 
 import { useAuth } from "../../context/AuthContext";
@@ -17,10 +22,16 @@ import { useAuth } from "../../context/AuthContext";
 export default function DigitalLicenseScreen() {
   const { user } = useAuth();
   const navigation = useNavigation();
+  const licenseCardRef = useRef<View>(null);
+
+  const { width, height } = useWindowDimensions();
+  const isSmallLandscape = width > height && height < 450;
+
+  const [downloading, setDownloading] = useState(false);
 
   /*
    * =========================================================
-   * FORCE THIS SCREEN INTO LANDSCAPE
+   * FORCE LANDSCAPE
    * =========================================================
    */
 
@@ -37,10 +48,6 @@ export default function DigitalLicenseScreen() {
 
     enableLandscape();
 
-    /*
-     * When leaving this screen,
-     * return the application to portrait.
-     */
     return () => {
       ScreenOrientation.lockAsync(
         ScreenOrientation.OrientationLock.PORTRAIT
@@ -49,6 +56,58 @@ export default function DigitalLicenseScreen() {
       });
     };
   }, []);
+
+  /*
+   * =========================================================
+   * DOWNLOAD THE COMPLETE LICENCE CARD
+   * =========================================================
+   */
+
+  const downloadLicense = async () => {
+    if (!licenseCardRef.current || downloading) {
+      return;
+    }
+
+    try {
+      setDownloading(true);
+
+      // Capture the entire licence card as a PNG image.
+      const imageUri = await captureRef(licenseCardRef, {
+        format: "png",
+        quality: 1,
+        result: "tmpfile",
+      });
+
+      // Request gallery permission.
+      const permission =
+        await MediaLibrary.requestPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          "Permission required",
+          "Please allow photo access so your digital licence can be saved to your gallery."
+        );
+        return;
+      }
+
+      // Save the complete image to the device gallery.
+      await MediaLibrary.saveToLibraryAsync(imageUri);
+
+      Alert.alert(
+        "Licence downloaded",
+        "Your digital licence has been saved to your phone's gallery."
+      );
+    } catch (error) {
+      console.error("Digital licence download failed:", error);
+
+      Alert.alert(
+        "Download failed",
+        "We could not save your digital licence. Please try again."
+      );
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   /*
    * =========================================================
@@ -115,7 +174,9 @@ export default function DigitalLicenseScreen() {
     user.birthDate ?? "N/A";
 
   /*
+   * =========================================================
    * QR INFORMATION
+   * =========================================================
    */
 
   const qrValue = JSON.stringify({
@@ -134,15 +195,21 @@ export default function DigitalLicenseScreen() {
    */
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={[
+        styles.screen,
+        isSmallLandscape && styles.landscapeScreen,
+      ]}
+    >
       <StatusBar hidden />
 
-      {/* =====================================================
-          BACK BUTTON
-      ===================================================== */}
+      {/* BACK BUTTON */}
 
       <TouchableOpacity
-        style={styles.backButton}
+        style={[
+          styles.backButton,
+          isSmallLandscape && styles.backButtonCompact,
+        ]}
         onPress={() => navigation.goBack()}
         activeOpacity={0.8}
       >
@@ -152,25 +219,37 @@ export default function DigitalLicenseScreen() {
           color="#FFFFFF"
         />
 
-        <Text style={styles.backText}>
-          Back
-        </Text>
+        <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
       {/* =====================================================
-          LICENCE CARD
+          COMPLETE LICENCE CARD
+          This entire view is captured for downloading.
       ===================================================== */}
 
-      <View style={styles.licenseCard}>
+      <View
+        ref={licenseCardRef}
+        collapsable={false}
+        style={[
+          styles.licenseCard,
+          isSmallLandscape && styles.licenseCardCompact,
+        ]}
+      >
+        {/* HEADER */}
 
-        {/* ===================================================
-            HEADER
-        =================================================== */}
-
-        <View style={styles.header}>
-
+        <View
+          style={[
+            styles.header,
+            isSmallLandscape && styles.headerCompact,
+          ]}
+        >
           <View style={styles.headerLeft}>
-            <View style={styles.govIcon}>
+            <View
+              style={[
+                styles.govIcon,
+                isSmallLandscape && styles.govIconCompact,
+              ]}
+            >
               <MaterialIcons
                 name="account-balance"
                 size={28}
@@ -202,34 +281,33 @@ export default function DigitalLicenseScreen() {
           </View>
         </View>
 
-        {/* ===================================================
-            MAIN CONTENT
-        =================================================== */}
+        {/* MAIN CONTENT */}
 
-        <View style={styles.mainContent}>
+        <View
+          style={[
+            styles.mainContent,
+            isSmallLandscape && styles.mainContentCompact,
+          ]}
+        >
+          {/* PROFILE */}
 
-          {/* ===============================================
-              PROFILE
-          =============================================== */}
-
-          <View style={styles.profileSection}>
-
-            <View style={styles.photo}>
-
-              {user.profilePhoto ? (
-                <MaterialIcons
-                  name="person"
-                  size={65}
-                  color="#003366"
-                />
-              ) : (
-                <MaterialIcons
-                  name="person"
-                  size={65}
-                  color="#003366"
-                />
-              )}
-
+          <View
+            style={[
+              styles.profileSection,
+              isSmallLandscape && styles.profileSectionCompact,
+            ]}
+          >
+            <View
+              style={[
+                styles.photo,
+                isSmallLandscape && styles.photoCompact,
+              ]}
+            >
+              <MaterialIcons
+                name="person"
+                size={isSmallLandscape ? 48 : 65}
+                color="#003366"
+              />
             </View>
 
             <Text style={styles.initials}>
@@ -239,6 +317,7 @@ export default function DigitalLicenseScreen() {
             <Text
               style={styles.fullName}
               numberOfLines={2}
+              adjustsFontSizeToFit
             >
               {fullName || "Not Available"}
             </Text>
@@ -249,6 +328,7 @@ export default function DigitalLicenseScreen() {
                 status.toLowerCase() === "valid"
                   ? styles.valid
                   : styles.invalid,
+                isSmallLandscape && styles.statusBadgeCompact,
               ]}
             >
               <View
@@ -273,18 +353,14 @@ export default function DigitalLicenseScreen() {
             </View>
           </View>
 
-          {/* ===============================================
-              DETAILS
-          =============================================== */}
+          {/* DETAILS */}
 
           <View style={styles.detailsSection}>
-
             <Text style={styles.sectionTitle}>
               DRIVER INFORMATION
             </Text>
 
             <View style={styles.detailsGrid}>
-
               <Info
                 label="Licence Number"
                 value={licenseNumber}
@@ -319,20 +395,26 @@ export default function DigitalLicenseScreen() {
                 label="Expiry Date"
                 value={expiryDate}
               />
-
             </View>
           </View>
 
-          {/* ===============================================
-              QR CODE
-          =============================================== */}
+          {/* QR CODE */}
 
-          <View style={styles.qrSection}>
-
-            <View style={styles.qrContainer}>
+          <View
+            style={[
+              styles.qrSection,
+              isSmallLandscape && styles.qrSectionCompact,
+            ]}
+          >
+            <View
+              style={[
+                styles.qrContainer,
+                isSmallLandscape && styles.qrContainerCompact,
+              ]}
+            >
               <QRCode
                 value={qrValue}
-                size={125}
+                size={isSmallLandscape ? 92 : 125}
                 backgroundColor="#FFFFFF"
                 color="#111111"
               />
@@ -356,14 +438,15 @@ export default function DigitalLicenseScreen() {
           </View>
         </View>
 
-        {/* ===================================================
-            FOOTER
-        =================================================== */}
+        {/* FOOTER */}
 
-        <View style={styles.footer}>
-
+        <View
+          style={[
+            styles.footer,
+            isSmallLandscape && styles.footerCompact,
+          ]}
+        >
           <View style={styles.footerLeft}>
-
             <MaterialIcons
               name="verified-user"
               size={17}
@@ -373,10 +456,12 @@ export default function DigitalLicenseScreen() {
             <Text style={styles.footerText}>
               Government-issued digital credential
             </Text>
-
           </View>
 
-          <Text style={styles.footerLicense}>
+          <Text
+            style={styles.footerLicense}
+            numberOfLines={1}
+          >
             Licence No. {licenseNumber}
           </Text>
 
@@ -384,8 +469,41 @@ export default function DigitalLicenseScreen() {
             SOUTH AFRICA
           </Text>
         </View>
-
       </View>
+
+      {/* =====================================================
+          DOWNLOAD BUTTON
+      ===================================================== */}
+
+      <TouchableOpacity
+        style={[
+          styles.downloadButton,
+          isSmallLandscape && styles.downloadButtonCompact,
+          downloading && styles.downloadButtonDisabled,
+        ]}
+        onPress={downloadLicense}
+        disabled={downloading}
+        activeOpacity={0.85}
+      >
+        {downloading ? (
+          <ActivityIndicator
+            size="small"
+            color="#FFFFFF"
+          />
+        ) : (
+          <MaterialIcons
+            name="file-download"
+            size={22}
+            color="#FFFFFF"
+          />
+        )}
+
+        <Text style={styles.downloadButtonText}>
+          {downloading
+            ? "Downloading..."
+            : "Download Licence"}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -412,6 +530,7 @@ function Info({
       <Text
         style={styles.infoValue}
         numberOfLines={1}
+        adjustsFontSizeToFit
       >
         {value}
       </Text>
@@ -426,7 +545,6 @@ function Info({
  */
 
 const styles = StyleSheet.create({
-
   /*
    * SCREEN
    */
@@ -436,7 +554,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#111820",
     justifyContent: "center",
     alignItems: "center",
-    padding: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+
+  landscapeScreen: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
   },
 
   /*
@@ -448,16 +572,19 @@ const styles = StyleSheet.create({
     top: 15,
     left: 18,
     zIndex: 20,
-
     flexDirection: "row",
     alignItems: "center",
-
-    backgroundColor: "rgba(0,0,0,0.55)",
-
+    backgroundColor: "rgba(0,0,0,0.75)",
     paddingHorizontal: 12,
     paddingVertical: 8,
-
     borderRadius: 20,
+  },
+
+  backButtonCompact: {
+    top: 4,
+    left: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
 
   backText: {
@@ -472,17 +599,12 @@ const styles = StyleSheet.create({
    */
 
   licenseCard: {
-    width: "92%",
+    width: "100%",
     maxWidth: 900,
-
     backgroundColor: "#FFFFFF",
-
     borderRadius: 18,
-
     overflow: "hidden",
-
     elevation: 10,
-
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
@@ -492,20 +614,27 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
   },
 
+  licenseCardCompact: {
+    maxWidth: 900,
+    borderRadius: 12,
+  },
+
   /*
    * HEADER
    */
 
   header: {
-    height: 68,
-
+    minHeight: 68,
     backgroundColor: "#003366",
-
     paddingHorizontal: 22,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+
+  headerCompact: {
+    minHeight: 48,
+    paddingHorizontal: 12,
   },
 
   headerLeft: {
@@ -516,15 +645,18 @@ const styles = StyleSheet.create({
   govIcon: {
     width: 43,
     height: 43,
-
     borderRadius: 10,
-
     backgroundColor: "rgba(255,255,255,0.15)",
-
     justifyContent: "center",
     alignItems: "center",
-
     marginRight: 12,
+  },
+
+  govIconCompact: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    marginRight: 8,
   },
 
   department: {
@@ -544,12 +676,9 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: "row",
     alignItems: "center",
-
     paddingHorizontal: 13,
     paddingVertical: 8,
-
     borderRadius: 20,
-
     backgroundColor: "rgba(255,255,255,0.12)",
   },
 
@@ -562,16 +691,20 @@ const styles = StyleSheet.create({
   },
 
   /*
-   * MAIN
+   * MAIN CONTENT
    */
 
   mainContent: {
     minHeight: 235,
-
     flexDirection: "row",
-
     paddingHorizontal: 22,
     paddingVertical: 18,
+  },
+
+  mainContentCompact: {
+    minHeight: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
 
   /*
@@ -580,29 +713,32 @@ const styles = StyleSheet.create({
 
   profileSection: {
     width: "24%",
-
     alignItems: "center",
     justifyContent: "center",
-
     borderRightWidth: 1,
     borderRightColor: "#E5E7EB",
-
     paddingRight: 18,
+  },
+
+  profileSectionCompact: {
+    paddingRight: 8,
   },
 
   photo: {
     width: 88,
     height: 88,
-
     borderRadius: 12,
-
     backgroundColor: "#E8F1FB",
-
     borderWidth: 1,
     borderColor: "#D4E1ED",
-
     justifyContent: "center",
     alignItems: "center",
+  },
+
+  photoCompact: {
+    width: 58,
+    height: 58,
+    borderRadius: 9,
   },
 
   initials: {
@@ -614,12 +750,9 @@ const styles = StyleSheet.create({
 
   fullName: {
     color: "#111827",
-
     fontSize: 17,
     fontWeight: "800",
-
     textAlign: "center",
-
     marginTop: 4,
   },
 
@@ -630,13 +763,16 @@ const styles = StyleSheet.create({
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-
     paddingHorizontal: 12,
     paddingVertical: 6,
-
     borderRadius: 20,
-
     marginTop: 9,
+  },
+
+  statusBadgeCompact: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    marginTop: 5,
   },
 
   valid: {
@@ -650,9 +786,7 @@ const styles = StyleSheet.create({
   statusDot: {
     width: 7,
     height: 7,
-
     borderRadius: 4,
-
     marginRight: 6,
   },
 
@@ -683,20 +817,16 @@ const styles = StyleSheet.create({
 
   detailsSection: {
     flex: 1,
-
-    paddingHorizontal: 22,
-
+    minWidth: 0,
+    paddingHorizontal: 12,
     justifyContent: "center",
   },
 
   sectionTitle: {
     color: "#7A8794",
-
     fontSize: 10,
     fontWeight: "800",
-
     letterSpacing: 1,
-
     marginBottom: 13,
   },
 
@@ -707,81 +837,72 @@ const styles = StyleSheet.create({
 
   infoItem: {
     width: "50%",
-
     marginBottom: 14,
-
-    paddingRight: 15,
+    paddingRight: 8,
   },
 
   infoLabel: {
     color: "#7A8794",
-
     fontSize: 9,
-
     textTransform: "uppercase",
-
     marginBottom: 3,
   },
 
   infoValue: {
     color: "#17202A",
-
     fontSize: 13,
-
     fontWeight: "800",
   },
 
   /*
-   * QR
+   * QR CODE
    */
 
   qrSection: {
     width: "19%",
-
     minWidth: 130,
-
     borderLeftWidth: 1,
     borderLeftColor: "#E5E7EB",
-
     alignItems: "center",
     justifyContent: "center",
-
     paddingLeft: 15,
+  },
+
+  qrSectionCompact: {
+    width: 105,
+    minWidth: 105,
+    paddingLeft: 8,
   },
 
   qrContainer: {
     padding: 7,
-
     backgroundColor: "#FFFFFF",
-
     borderWidth: 1,
     borderColor: "#E1E5E9",
-
     borderRadius: 8,
+  },
+
+  qrContainerCompact: {
+    padding: 4,
+    borderRadius: 6,
   },
 
   verifyRow: {
     flexDirection: "row",
     alignItems: "center",
-
     marginTop: 8,
   },
 
   verifyText: {
     color: "#2E7D32",
-
     fontSize: 9,
-
     fontWeight: "800",
-
     marginLeft: 4,
   },
 
   scanText: {
     color: "#777",
-
     fontSize: 9,
-
     marginTop: 3,
   },
 
@@ -790,16 +911,18 @@ const styles = StyleSheet.create({
    */
 
   footer: {
-    height: 42,
-
+    minHeight: 42,
     borderTopWidth: 1,
     borderTopColor: "#E5E7EB",
-
     paddingHorizontal: 20,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+
+  footerCompact: {
+    minHeight: 30,
+    paddingHorizontal: 10,
   },
 
   footerLeft: {
@@ -809,28 +932,58 @@ const styles = StyleSheet.create({
 
   footerText: {
     color: "#68727D",
-
     fontSize: 9,
-
     marginLeft: 6,
   },
 
   footerLicense: {
     color: "#68727D",
-
     fontSize: 9,
-
     fontWeight: "700",
   },
 
   footerCountry: {
     color: "#003366",
-
     fontSize: 9,
-
     fontWeight: "800",
-
     letterSpacing: 1,
+  },
+
+  /*
+   * DOWNLOAD BUTTON
+   */
+
+  downloadButton: {
+    width: "100%",
+    maxWidth: 900,
+    minHeight: 46,
+    marginTop: 10,
+    borderRadius: 12,
+    backgroundColor: "#003366",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    elevation: 4,
+  },
+
+  downloadButtonCompact: {
+    minHeight: 36,
+    marginTop: 5,
+    paddingVertical: 5,
+    borderRadius: 9,
+  },
+
+  downloadButtonDisabled: {
+    opacity: 0.7,
+  },
+
+  downloadButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
+    marginLeft: 8,
   },
 
   /*
@@ -839,21 +992,15 @@ const styles = StyleSheet.create({
 
   loadingContainer: {
     flex: 1,
-
     backgroundColor: "#111820",
-
     justifyContent: "center",
     alignItems: "center",
   },
 
   loadingText: {
     color: "#FFFFFF",
-
     marginTop: 12,
-
     fontSize: 15,
-
     fontWeight: "600",
   },
 });
-

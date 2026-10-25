@@ -1,10 +1,14 @@
+
 import React, { useState } from "react";
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  Image,
-  StyleSheet,
+  View,
 } from "react-native";
 import Animated, {
   FadeIn,
@@ -18,52 +22,449 @@ import {
   MaterialCommunityIcons,
 } from "@expo/vector-icons";
 
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
+import { sha256 } from "js-sha256";
+
 import { useAuth } from "../context/AuthContext";
 
 export default function DriverLicenseCard() {
   const [expanded, setExpanded] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [fingerprint, setFingerprint] = useState("");
 
   const { user } = useAuth();
-
-  /*
-   * =========================================================
-   * USER DATA FROM AUTH CONTEXT
-   * =========================================================
-   */
 
   const license = user?.driverLicense;
 
   const fullName = user?.fullName || "Citizen";
-
   const idNumber = user?.idNumber || "Not available";
-
   const profilePhoto = user?.profilePhoto;
 
   const licenseNumber = license?.number || "Not available";
-
   const licenseStatus = license?.status || "UNKNOWN";
-
   const licenseClass = license?.class || "Not available";
-
   const issueDate = license?.issueDate || "Not available";
-
   const expiryDate = license?.expiryDate || "Not available";
-
   const cardNumber = license?.cardNumber || "Not available";
 
   const digitalLicense = user?.digitalLicense;
-
-  /*
-   * =========================================================
-   * STATUS
-   * =========================================================
-   */
 
   const isValid =
     licenseStatus.toLowerCase() === "valid" ||
     licenseStatus.toLowerCase() === "active";
 
-  const statusText = isValid ? "VALID" : licenseStatus.toUpperCase();
+  const statusText = isValid
+    ? "VALID"
+    : licenseStatus.toUpperCase();
+
+  // Escape values before inserting them into HTML.
+  const escapeHtml = (value: unknown): string =>
+    String(value ?? "Not available")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+  // Generate a deterministic fingerprint of the licence data.
+  // This is not an official issuer signature.
+  const createRecordFingerprint = () => {
+    const record = {
+      fullName,
+      idNumber,
+      licenseNumber,
+      licenseStatus,
+      licenseClass,
+      issueDate,
+      expiryDate,
+      cardNumber,
+      profilePhoto: profilePhoto || "",
+      qrToken: digitalLicense?.qrToken || "",
+    };
+
+    return sha256(JSON.stringify(record));
+  };
+
+  // Generate the downloadable PDF.
+  const createLicencePdf = async () => {
+    if (!user?.driverLicense) {
+      Alert.alert(
+        "Licence unavailable",
+        "No driving licence record is available to export."
+      );
+      return null;
+    }
+
+    try {
+      const recordFingerprint = createRecordFingerprint();
+
+      const photoHtml = profilePhoto
+        ? `<img class="photo" src="${escapeHtml(
+            profilePhoto
+          )}" />`
+        : `<div class="photo-placeholder">PROFILE</div>`;
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport"
+                content="width=device-width, initial-scale=1" />
+
+          <style>
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              font-family: Arial, sans-serif;
+              color: #17212B;
+              padding: 24px;
+              font-size: 12px;
+            }
+
+            .header {
+              background: #083B68;
+              color: white;
+              padding: 22px;
+              border-radius: 10px;
+            }
+
+            .eyebrow {
+              font-size: 10px;
+              letter-spacing: 1px;
+              font-weight: bold;
+            }
+
+            h1 {
+              font-size: 23px;
+              margin: 12px 0 8px;
+            }
+
+            .subtitle {
+              font-size: 11px;
+              line-height: 1.6;
+            }
+
+            .profile {
+              display: flex;
+              align-items: center;
+              gap: 16px;
+              margin: 24px 0;
+            }
+
+            .photo {
+              width: 82px;
+              height: 82px;
+              object-fit: cover;
+              border-radius: 8px;
+            }
+
+            .photo-placeholder {
+              width: 82px;
+              height: 82px;
+              background: #EAF3FA;
+              color: #083B68;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 8px;
+              font-size: 10px;
+            }
+
+            h2 {
+              font-size: 18px;
+              margin: 7px 0;
+            }
+
+            .label {
+              font-size: 9px;
+              color: #66737F;
+              font-weight: bold;
+              letter-spacing: 0.5px;
+              margin-bottom: 5px;
+            }
+
+            .value {
+              font-size: 12px;
+              overflow-wrap: anywhere;
+            }
+
+            .row {
+              padding: 12px 0;
+              border-bottom: 1px solid #D9E0E6;
+            }
+
+            .fingerprint {
+              margin-top: 22px;
+              padding: 14px;
+              border: 1px solid #D9E0E6;
+              background: #F3F5F7;
+              border-radius: 8px;
+            }
+
+            .hash {
+              margin-top: 8px;
+              font-size: 9px;
+              line-height: 1.7;
+              overflow-wrap: anywhere;
+              word-break: break-all;
+            }
+
+            .notice {
+              margin-top: 22px;
+              padding-top: 12px;
+              border-top: 1px solid #D9E0E6;
+              color: #66737F;
+              font-size: 9px;
+              line-height: 1.7;
+            }
+
+            .status {
+              display: inline-block;
+              margin-top: 8px;
+              padding: 6px 9px;
+              background: #EAF3FA;
+              border-radius: 5px;
+              font-weight: bold;
+            }
+          </style>
+        </head>
+
+        <body>
+          <div class="header">
+            <div class="eyebrow">
+              TRAFFIC CONNECT SYSTEM
+            </div>
+
+            <h1>Digital Driver Licence Record</h1>
+
+            <div class="subtitle">
+              Personal licence record
+            </div>
+
+            <div class="status">
+              STATUS: ${escapeHtml(statusText)}
+            </div>
+          </div>
+
+          <div class="profile">
+            ${photoHtml}
+
+            <div>
+              <div class="label">LICENCE HOLDER</div>
+              <h2>${escapeHtml(fullName)}</h2>
+              <div class="value">
+                Licence No: ${escapeHtml(licenseNumber)}
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="label">IDENTITY NUMBER</div>
+            <div class="value">${escapeHtml(idNumber)}</div>
+          </div>
+
+          <div class="row">
+            <div class="label">DRIVING CODE</div>
+            <div class="value">${escapeHtml(licenseClass)}</div>
+          </div>
+
+          <div class="row">
+            <div class="label">ISSUE DATE</div>
+            <div class="value">${escapeHtml(issueDate)}</div>
+          </div>
+
+          <div class="row">
+            <div class="label">EXPIRY DATE</div>
+            <div class="value">${escapeHtml(expiryDate)}</div>
+          </div>
+
+          <div class="row">
+            <div class="label">CARD NUMBER</div>
+            <div class="value">${escapeHtml(cardNumber)}</div>
+          </div>
+
+          <div class="row">
+            <div class="label">VERIFICATION TOKEN</div>
+            <div class="value">${escapeHtml(
+              digitalLicense?.qrToken || "Not available"
+            )}</div>
+          </div>
+
+          <div class="fingerprint">
+            <div class="label">
+              SHA-256 RECORD FINGERPRINT
+            </div>
+
+            <div class="hash">${recordFingerprint}</div>
+          </div>
+
+          <div class="notice">
+            Exported from TrafficConnectSystem.
+
+            This fingerprint identifies the licence data used
+            to generate this document. It does not prove that
+            the document was issued by a government authority
+            or independently establish licence validity.
+
+            Verify the record through a trusted verification
+            service before relying on it.
+          </div>
+        </body>
+        </html>
+      `;
+
+      const pdf = await Print.printToFileAsync({ html });
+
+      setFingerprint(recordFingerprint);
+
+      console.log("LICENCE_PDF_CREATED:", pdf.uri);
+      console.log(
+        "LICENCE_RECORD_SHA256:",
+        recordFingerprint
+      );
+
+      return {
+        uri: pdf.uri,
+        fingerprint: recordFingerprint,
+      };
+    } catch (error) {
+      console.error("LICENCE_PDF_ERROR:", error);
+
+      Alert.alert(
+        "PDF generation failed",
+        "Could not create your licence PDF. Please try again."
+      );
+
+      return null;
+    }
+  };
+
+  // Download/save PDF.
+  const handleDownload = async () => {
+    if (isExporting) return;
+
+    setIsExporting(true);
+
+    try {
+      const result = await createLicencePdf();
+
+      if (!result) return;
+
+      if (Platform.OS === "android") {
+        const permission =
+          await FileSystem.StorageAccessFramework
+            .requestDirectoryPermissionsAsync();
+
+        if (!permission.granted) {
+          Alert.alert(
+            "Save cancelled",
+            "Choose a folder to save your PDF."
+          );
+          return;
+        }
+
+        const destination =
+          await FileSystem.StorageAccessFramework
+            .createFileAsync(
+              permission.directoryUri,
+              "TrafficConnect_Driver_Licence.pdf",
+              "application/pdf"
+            );
+
+        const base64 = await FileSystem.readAsStringAsync(
+          result.uri,
+          {
+            encoding: FileSystem.EncodingType.Base64,
+          }
+        );
+
+        await FileSystem.writeAsStringAsync(
+          destination,
+          base64,
+          {
+            encoding: FileSystem.EncodingType.Base64,
+          }
+        );
+
+        console.log("LICENCE_PDF_SAVED:", destination);
+
+        Alert.alert(
+          "Download complete",
+          "Your licence PDF has been saved successfully."
+        );
+      } else {
+        const available = await Sharing.isAvailableAsync();
+
+        if (!available) {
+          Alert.alert(
+            "Export unavailable",
+            "The system sharing menu is unavailable."
+          );
+          return;
+        }
+
+        await Sharing.shareAsync(result.uri, {
+          mimeType: "application/pdf",
+          UTI: "com.adobe.pdf",
+          dialogTitle: "Save your licence PDF",
+        });
+      }
+    } catch (error) {
+      console.error("LICENCE_DOWNLOAD_ERROR:", error);
+
+      Alert.alert(
+        "Download failed",
+        "Could not save the PDF. Please try again."
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Share PDF using the phone's native share menu.
+  const handleShare = async () => {
+    if (isExporting) return;
+
+    setIsExporting(true);
+
+    try {
+      const result = await createLicencePdf();
+
+      if (!result) return;
+
+      const available = await Sharing.isAvailableAsync();
+
+      if (!available) {
+        Alert.alert(
+          "Sharing unavailable",
+          "Sharing is not supported on this device."
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(result.uri, {
+        mimeType: "application/pdf",
+        UTI: "com.adobe.pdf",
+        dialogTitle: "Share your licence PDF",
+      });
+
+      console.log("LICENCE_PDF_SHARED_FROM:", result.uri);
+    } catch (error) {
+      console.error("LICENCE_SHARE_ERROR:", error);
+
+      Alert.alert(
+        "Sharing failed",
+        "Could not share the licence PDF. Please try again."
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <Animated.View
@@ -72,9 +473,7 @@ export default function DriverLicenseCard() {
       exiting={FadeOut.duration(200)}
       style={styles.container}
     >
-      {/* =====================================================
-          COLLAPSED SUMMARY
-      ===================================================== */}
+      {/* COLLAPSED SUMMARY */}
 
       <TouchableOpacity
         style={styles.summary}
@@ -134,9 +533,7 @@ export default function DriverLicenseCard() {
           <View style={styles.expandButton}>
             <Ionicons
               name={
-                expanded
-                  ? "chevron-up"
-                  : "chevron-down"
+                expanded ? "chevron-up" : "chevron-down"
               }
               size={18}
               color={COLORS.primary}
@@ -145,18 +542,14 @@ export default function DriverLicenseCard() {
         </View>
       </TouchableOpacity>
 
-      {/* =====================================================
-          DIGITAL LICENCE
-      ===================================================== */}
+      {/* EXPANDED DIGITAL LICENCE */}
 
       {expanded && (
         <Animated.View
           entering={FadeIn.duration(300)}
           style={styles.licenceWrapper}
         >
-          {/* =================================================
-              GOVERNMENT HEADER
-          ================================================= */}
+          {/* HEADER */}
 
           <View style={styles.licenceHeader}>
             <View style={styles.govIcon}>
@@ -169,11 +562,11 @@ export default function DriverLicenseCard() {
 
             <View style={styles.govInformation}>
               <Text style={styles.govCountry}>
-                REPUBLIC OF SOUTH AFRICA
+                TRAFFIC CONNECT SYSTEM
               </Text>
 
               <Text style={styles.govDepartment}>
-                DEPARTMENT OF TRANSPORT
+                DIGITAL LICENCE RECORD
               </Text>
             </View>
 
@@ -184,14 +577,12 @@ export default function DriverLicenseCard() {
             </View>
           </View>
 
-          {/* =================================================
-              LICENCE TITLE
-          ================================================= */}
+          {/* TITLE */}
 
           <View style={styles.licenceTitleSection}>
             <View>
               <Text style={styles.licenceEyebrow}>
-                OFFICIAL DOCUMENT
+                PERSONAL RECORD
               </Text>
 
               <Text style={styles.licenceTitle}>
@@ -223,9 +614,7 @@ export default function DriverLicenseCard() {
             </View>
           </View>
 
-          {/* =================================================
-              PROFILE
-          ================================================= */}
+          {/* PROFILE */}
 
           <View style={styles.profileSection}>
             {profilePhoto ? (
@@ -256,14 +645,12 @@ export default function DriverLicenseCard() {
               </Text>
 
               <Text style={styles.profileSecondary}>
-                South African Driver
+                Driver profile record
               </Text>
             </View>
           </View>
 
-          {/* =================================================
-              LICENCE NUMBER
-          ================================================= */}
+          {/* LICENCE NUMBER */}
 
           <View style={styles.licenceNumberCard}>
             <View>
@@ -283,9 +670,7 @@ export default function DriverLicenseCard() {
             />
           </View>
 
-          {/* =================================================
-              INFORMATION GRID
-          ================================================= */}
+          {/* LICENCE DETAILS */}
 
           <View style={styles.detailsSection}>
             <Text style={styles.sectionLabel}>
@@ -312,9 +697,7 @@ export default function DriverLicenseCard() {
                 label="EXPIRY DATE"
                 value={expiryDate}
                 valueColor={
-                  isValid
-                    ? COLORS.success
-                    : COLORS.danger
+                  isValid ? COLORS.success : COLORS.danger
                 }
               />
 
@@ -322,12 +705,18 @@ export default function DriverLicenseCard() {
                 label="CARD NUMBER"
                 value={cardNumber}
               />
+
+              <Detail
+                label="STATUS"
+                value={statusText}
+                valueColor={
+                  isValid ? COLORS.success : COLORS.danger
+                }
+              />
             </View>
           </View>
 
-          {/* =================================================
-              VERIFICATION
-          ================================================= */}
+          {/* VERIFICATION */}
 
           <View style={styles.verificationSection}>
             <View style={styles.verificationHeader}>
@@ -337,7 +726,7 @@ export default function DriverLicenseCard() {
                 </Text>
 
                 <Text style={styles.verificationTitle}>
-                  Scan to verify licence
+                  Verification token
                 </Text>
               </View>
 
@@ -349,7 +738,7 @@ export default function DriverLicenseCard() {
                 />
 
                 <Text style={styles.secureText}>
-                  SECURE
+                  RECORD
                 </Text>
               </View>
             </View>
@@ -358,7 +747,7 @@ export default function DriverLicenseCard() {
               <View style={styles.qrBox}>
                 <Ionicons
                   name="qr-code-outline"
-                  size={82}
+                  size={70}
                   color={COLORS.primaryDark}
                 />
               </View>
@@ -374,19 +763,62 @@ export default function DriverLicenseCard() {
                 </Text>
 
                 <Text style={styles.qrDescription}>
-                  Scan this code to verify the
-                  authenticity and current status
-                  of this digital licence.
+                  This token is included in your exported
+                  record. A trusted verification service is
+                  required to independently verify it.
                 </Text>
               </View>
             </View>
           </View>
 
-          {/* =================================================
-              VERIFIED NOTICE
-          ================================================= */}
+          {/* DIGITAL FINGERPRINT */}
 
-          <View style={styles.verificationNotice}>
+          {fingerprint ? (
+            <TouchableOpacity
+              style={styles.fingerprintCard}
+              activeOpacity={0.8}
+              onPress={() => {
+                Alert.alert(
+                  "SHA-256 record fingerprint",
+                  fingerprint
+                );
+              }}
+            >
+              <View style={styles.fingerprintHeader}>
+                <MaterialCommunityIcons
+                  name="fingerprint"
+                  size={24}
+                  color={COLORS.primary}
+                />
+
+                <Text style={styles.sectionLabel}>
+                  DIGITAL FINGERPRINT
+                </Text>
+              </View>
+
+              <Text
+                selectable
+                style={styles.fingerprintText}
+              >
+                {fingerprint}
+              </Text>
+
+              <Text style={styles.fingerprintHint}>
+                Tap to view the complete fingerprint.
+                This identifies the record data, not the
+                authenticity of the issuing authority.
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {/* STATUS NOTICE */}
+
+          <View
+            style={[
+              styles.verificationNotice,
+              !isValid && styles.invalidNotice,
+            ]}
+          >
             <Ionicons
               name={
                 isValid
@@ -395,9 +827,7 @@ export default function DriverLicenseCard() {
               }
               size={18}
               color={
-                isValid
-                  ? COLORS.success
-                  : COLORS.danger
+                isValid ? COLORS.success : COLORS.danger
               }
             />
 
@@ -405,71 +835,87 @@ export default function DriverLicenseCard() {
               <Text
                 style={[
                   styles.noticeTitle,
-                  !isValid && {
-                    color: COLORS.danger,
-                  },
+                  !isValid && styles.invalidText,
                 ]}
               >
                 {isValid
-                  ? "Licence verified"
-                  : "Licence requires attention"}
+                  ? "Record marked active"
+                  : "Record requires attention"}
               </Text>
 
               <Text style={styles.noticeDescription}>
                 {isValid
-                  ? "Digital record is active and valid."
-                  : "Please check your licence status."}
+                  ? "The stored licence status is active."
+                  : "Check the stored licence status."}
               </Text>
             </View>
 
             <Text style={styles.noticeDate}>
               {digitalLicense?.lastGenerated
-                ? formatDate(
-                    digitalLicense.lastGenerated
-                  )
-                : "Not available"}
+                ? formatDate(digitalLicense.lastGenerated)
+                : ""}
             </Text>
           </View>
 
-          {/* =================================================
-              ACTIONS
-          ================================================= */}
+          {/* DOWNLOAD AND SHARE */}
 
           <View style={styles.actions}>
             <TouchableOpacity
-              style={styles.secondaryButton}
+              style={[
+                styles.secondaryButton,
+                isExporting && styles.disabledButton,
+              ]}
               activeOpacity={0.8}
+              onPress={handleDownload}
+              disabled={isExporting}
             >
-              <Ionicons
-                name="download-outline"
-                size={19}
-                color={COLORS.primary}
-              />
+              {isExporting ? (
+                <ActivityIndicator
+                  size="small"
+                  color={COLORS.primary}
+                />
+              ) : (
+                <Ionicons
+                  name="download-outline"
+                  size={19}
+                  color={COLORS.primary}
+                />
+              )}
 
               <Text style={styles.secondaryButtonText}>
-                Download
+                {isExporting ? "Preparing..." : "Download PDF"}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.primaryButton}
+              style={[
+                styles.primaryButton,
+                isExporting && styles.disabledButton,
+              ]}
               activeOpacity={0.8}
+              onPress={handleShare}
+              disabled={isExporting}
             >
-              <Ionicons
-                name="share-social-outline"
-                size={19}
-                color="#FFFFFF"
-              />
+              {isExporting ? (
+                <ActivityIndicator
+                  size="small"
+                  color="#FFFFFF"
+                />
+              ) : (
+                <Ionicons
+                  name="share-social-outline"
+                  size={19}
+                  color="#FFFFFF"
+                />
+              )}
 
               <Text style={styles.primaryButtonText}>
-                Share Licence
+                {isExporting ? "Preparing..." : "Share Licence"}
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* =================================================
-              FOOTER
-          ================================================= */}
+          {/* FOOTER */}
 
           <View style={styles.footer}>
             <Ionicons
@@ -479,8 +925,9 @@ export default function DriverLicenseCard() {
             />
 
             <Text style={styles.footerText}>
-              This digital licence is linked to your
-              registered citizen profile.
+              This is a digital record linked to the
+              registered profile. It is not, by itself,
+              proof of official government issuance.
             </Text>
           </View>
         </Animated.View>
@@ -489,9 +936,7 @@ export default function DriverLicenseCard() {
   );
 }
 
-/* =========================================================
-   DETAIL COMPONENT
-========================================================= */
+// DETAIL COMPONENT
 
 function Detail({
   label,
@@ -509,11 +954,10 @@ function Detail({
       </Text>
 
       <Text
+        selectable
         style={[
           styles.detailValue,
-          valueColor && {
-            color: valueColor,
-          },
+          valueColor ? { color: valueColor } : null,
         ]}
       >
         {value}
@@ -522,9 +966,7 @@ function Detail({
   );
 }
 
-/* =========================================================
-   DATE FORMATTER
-========================================================= */
+// DATE FORMATTER
 
 function formatDate(value: string) {
   if (!value) return "Not available";
@@ -542,32 +984,23 @@ function formatDate(value: string) {
   });
 }
 
-/* =========================================================
-   COLOURS
-========================================================= */
+// COLOURS
 
 const COLORS = {
   primary: "#0B4F8A",
   primaryDark: "#083B68",
-
   background: "#F3F5F7",
   white: "#FFFFFF",
-
   text: "#17212B",
   textLight: "#66737F",
-
   border: "#D9E0E6",
-
   success: "#18794E",
   danger: "#B42318",
-
   softBlue: "#EAF3FA",
   softGreen: "#ECFDF3",
 };
 
-/* =========================================================
-   STYLES
-========================================================= */
+// STYLES
 
 const styles = StyleSheet.create({
   container: {
@@ -605,6 +1038,7 @@ const styles = StyleSheet.create({
   titleRow: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
   },
 
   summaryTitle: {
@@ -990,6 +1424,36 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
+  fingerprintCard: {
+    marginHorizontal: 15,
+    marginTop: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.background,
+    borderRadius: 9,
+  },
+
+  fingerprintHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  fingerprintText: {
+    marginTop: 8,
+    fontSize: 10,
+    lineHeight: 16,
+    color: COLORS.primaryDark,
+  },
+
+  fingerprintHint: {
+    marginTop: 8,
+    fontSize: 9,
+    lineHeight: 14,
+    color: COLORS.textLight,
+  },
+
   verificationNotice: {
     marginHorizontal: 15,
     marginTop: 10,
@@ -1000,6 +1464,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     flexDirection: "row",
     alignItems: "center",
+  },
+
+  invalidNotice: {
+    borderColor: "#F3C7C4",
+    backgroundColor: "#FEF3F2",
   },
 
   noticeInformation: {
@@ -1032,13 +1501,14 @@ const styles = StyleSheet.create({
 
   secondaryButton: {
     flex: 1,
-    height: 42,
+    minHeight: 42,
     borderWidth: 1,
     borderColor: COLORS.primary,
     borderRadius: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 6,
     marginRight: 5,
     backgroundColor: COLORS.white,
   },
@@ -1052,11 +1522,12 @@ const styles = StyleSheet.create({
 
   primaryButton: {
     flex: 1.35,
-    height: 42,
+    minHeight: 42,
     borderRadius: 8,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 6,
     marginLeft: 5,
     backgroundColor: COLORS.primary,
   },
@@ -1066,6 +1537,10 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
     color: COLORS.white,
+  },
+
+  disabledButton: {
+    opacity: 0.6,
   },
 
   footer: {

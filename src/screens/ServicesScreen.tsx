@@ -45,15 +45,14 @@ const COLORS = {
 ========================================================= */
 
 export default function ServicesScreen() {
+    const navigation = useNavigation<any>();
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.contentContainer}
       >
-        {/* =================================================
-            HEADER
-        ================================================= */}
+        {/* HEADER */}
 
         <View style={styles.header}>
           <View style={styles.headerIcon}>
@@ -80,9 +79,7 @@ export default function ServicesScreen() {
           </View>
         </View>
 
-        {/* =================================================
-            APPOINTMENTS
-        ================================================= */}
+        {/* APPOINTMENTS */}
 
         <Section
           title="Appointments"
@@ -103,17 +100,10 @@ export default function ServicesScreen() {
             screen="MyAppointments"
           />
 
-          <ServiceItem
-            icon="history"
-            title="Appointment History"
-            description="View your previous, completed and cancelled appointments."
-            screen="AppointmentHistory"
-          />
+         
         </Section>
 
-        {/* =================================================
-            VEHICLE SERVICES
-        ================================================= */}
+        {/* VEHICLE SERVICES */}
 
         <Section
           title="Vehicle Services"
@@ -134,58 +124,66 @@ export default function ServicesScreen() {
             screen="ChangeOwnership"
           />
         </Section>
-
-        {/* =================================================
-            DOCUMENT UPLOADS
-        ================================================= */}
-
+```tsx
+        {/* APPLICATIONS */}
         <Section
-          title="Document Uploads"
-          description="Submit documents required for your traffic services."
-          icon="document-text-outline"
-        >
-          <ServiceItem
-            icon="upload-file"
-            title="Upload ID"
-            description="Securely upload your identification document."
-            screen="UploadID"
-          />
-
-          <ServiceItem
-            icon="upload"
-            title="Upload Proof of Address"
-            description="Upload a valid proof of residential address."
-            screen="UploadProofAddress"
-          />
-
-          <ServiceItem
-            icon="description"
-            title="Upload Supporting Documents"
-            description="Upload additional documents required for your application."
-            screen="UploadDocuments"
-          />
-        </Section>
-
-        {/* =================================================
-            APPLICATIONS
-        ================================================= */}
-
-        <Section
-          title="Applications"
-          description="Track and manage your traffic department applications."
+          title="Applications & Tracking"
+          description="Keep track of the traffic services you've applied for."
           icon="clipboard-outline"
         >
-          <ServiceItem
-            icon="assignment"
-            title="Applications Dashboard"
-            description="Track and manage your current traffic applications."
-            screen="ApplicationsDashboard"
-          />
-        </Section>
+          <TouchableOpacity
+            style={styles.applicationsCard}
+            activeOpacity={0.85}
+            onPress={() => {
+              navigation.navigate("ApplicationsDashboard" as never);
+            }}
+          >
+            {/* ICON */}
+            <View style={styles.applicationsIcon}>
+              <Ionicons
+                name="document-text-outline"
+                size={29}
+                color="#FFFFFF"
+              />
+            </View>
 
-        {/* =================================================
-            DRIVER & SAFETY
-        ================================================= */}
+            {/* TEXT */}
+            <View style={styles.applicationsTextContainer}>
+              <Text style={styles.applicationsTitle}>
+                My Applications
+              </Text>
+
+              <Text style={styles.applicationsDescription}>
+                Track your vehicle registration and change-of-ownership
+                applications. See whether they are submitted, being
+                reviewed, approved or rejected.
+              </Text>
+
+              {/* ACTION LABEL */}
+              <View style={styles.applicationsAction}>
+                <Text style={styles.applicationsActionText}>
+                  View Application Status
+                </Text>
+
+                <Ionicons
+                  name="arrow-forward-circle"
+                  size={20}
+                  color="#0B4F8A"
+                />
+              </View>
+            </View>
+
+            {/* CHEVRON */}
+            <Ionicons
+              name="chevron-forward"
+              size={19}
+              color="#0B4F8A"
+            />
+          </TouchableOpacity>
+        </Section>
+```
+
+        {/* DRIVER & SAFETY */}
 
         <Section
           title="Driver & Safety"
@@ -198,25 +196,9 @@ export default function ServicesScreen() {
             description="Complete or manage your driver licence eye test."
             screen="EyeTest"
           />
-
-          <ServiceItem
-            icon="credit-card"
-            title="Driver's Licence Services"
-            description="Manage your driver's licence applications and services."
-            screen="DriverLicense"
-          />
-
-          <ServiceItem
-            icon="verified-user"
-            title="Licence Verification"
-            description="Verify your driver's licence information."
-            screen="LicenseVerification"
-          />
         </Section>
 
-        {/* =================================================
-            BOTTOM NOTICE
-        ================================================= */}
+        {/* BOTTOM NOTICE */}
 
         <View style={styles.notice}>
           <Ionicons
@@ -299,8 +281,7 @@ function ServiceItem({
   const navigation = useNavigation<any>();
 
   const handlePress = () => {
-    const parentNavigation =
-      navigation.getParent();
+    const parentNavigation = navigation.getParent();
 
     if (parentNavigation) {
       parentNavigation.navigate(screen);
@@ -353,9 +334,7 @@ function ServiceItem({
 ========================================================= */
 
 const styles = StyleSheet.create({
-  /* =======================================================
-     SAFE AREA
-  ======================================================= */
+  /* SAFE AREA */
 
   safe: {
     flex: 1,
@@ -368,9 +347,7 @@ const styles = StyleSheet.create({
     paddingBottom: 60,
   },
 
-  /* =======================================================
-     HEADER
-  ======================================================= */
+  /* HEADER */
 
   header: {
     flexDirection: "row",
@@ -413,9 +390,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  /* =======================================================
-     SECTION
-  ======================================================= */
+  /* SECTION */
 
   section: {
     marginBottom: 22,
@@ -454,9 +429,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 
-  /* =======================================================
-     SERVICE ITEM
-  ======================================================= */
+  /* SERVICE ITEM */
 
   item: {
     flexDirection: "row",
@@ -497,9 +470,7 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
-  /* =======================================================
-     NOTICE
-  ======================================================= */
+  /* NOTICE */
 
   notice: {
     flexDirection: "row",
@@ -519,4 +490,74 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: COLORS.text,
   },
+
+  /* APPLICATIONS DASHBOARD */
+
+  applicationsCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#EAF3FA",
+    borderWidth: 1.5,
+    borderColor: "#9FC5E3",
+    borderRadius: 14,
+    padding: 15,
+    marginTop: 2,
+    shadowColor: "#0B4F8A",
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+
+  applicationsIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#0B4F8A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+
+  applicationsTextContainer: {
+    flex: 1,
+    marginRight: 8,
+  },
+
+  applicationsTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#083B68",
+    marginBottom: 6,
+  },
+
+  applicationsDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#445566",
+  },
+
+  applicationsAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    marginTop: 12,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#C7DDED",
+    gap: 7,
+  },
+
+  applicationsActionText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#0B4F8A",
+  },
+
 });

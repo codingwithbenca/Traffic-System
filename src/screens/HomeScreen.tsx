@@ -1,12 +1,21 @@
 
-import React, { ReactNode } from "react";
 
+import { useAuth } from "../context/AuthContext";
 import {
   Ionicons,
   MaterialCommunityIcons,
   MaterialIcons,
 } from "@expo/vector-icons";
+import React, { ReactNode, useEffect, useState } from "react";
 
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+} from "firebase/firestore";
+
+import { db } from "../services/firebase";
 import {
   ScrollView,
   StyleSheet,
@@ -100,6 +109,44 @@ type QuickActionProps = {
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
+  const { user, loading: authLoading } = useAuth();
+const citizenKey = String(
+  user?.id ?? user?.userId ?? user?.idNumber ?? ""
+).trim();
+
+const [decisionCount, setDecisionCount] = useState(0);
+
+useEffect(() => {
+  if (authLoading || !citizenKey) {
+    setDecisionCount(0);
+    return;
+  }
+
+  const requestsQuery = query(
+    collection(db, "profileChangeRequests"),
+    where("userId", "==", citizenKey)
+  );
+
+  const unsubscribe = onSnapshot(
+    requestsQuery,
+    (snapshot) => {
+      const decisions = snapshot.docs.filter((item) => {
+        const status = String(item.data().status ?? "")
+          .toLowerCase();
+
+        return status === "approved" || status === "rejected";
+      });
+
+      setDecisionCount(decisions.length);
+    },
+    (error) => {
+      console.error("Home notification counter error:", error);
+      setDecisionCount(0);
+    }
+  );
+
+  return unsubscribe;
+}, [citizenKey, authLoading]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -113,57 +160,67 @@ export default function HomeScreen() {
               HEADER
           ================================================= */}
 
-          <View style={styles.header}>
-            <View style={styles.headerIcon}>
-              <Ionicons
-                name="business-outline"
-                size={24}
-                color="#FFFFFF"
-              />
-            </View>
+         
+<View style={styles.header}>
+  <View style={styles.headerIcon}>
+    <Ionicons
+      name="business-outline"
+      size={23}
+      color="#FFFFFF"
+    />
+  </View>
 
-            <View style={styles.headerInformation}>
-              <Text style={styles.eyebrow}>
-                DEPARTMENT OF TRANSPORT SERVICES
-              </Text>
+  <View style={styles.headerInformation}>
+    <Text style={styles.eyebrow}>
+      TRAFFICCONNECT SA
+    </Text>
 
-              <Text style={styles.title}>
-                E-TRANSPORT PORTAL
-              </Text>
-            </View>
+    <Text style={styles.title}>
+      Citizen Portal
+    </Text>
+  </View>
 
-            <View style={styles.headerIcons}>
+  <View style={styles.headerIcons}>
+    {/* Notifications */}
+    <TouchableOpacity
+      style={styles.iconButton}
+      activeOpacity={0.8}
+      onPress={() => navigation.navigate("Notifications")}
+    >
+      <Ionicons
+        name="notifications-outline"
+        size={22}
+        color={COLORS.primary}
+      />
 
-              <TouchableOpacity
-                style={styles.iconButton}
-                activeOpacity={0.8}
-                onPress={() =>
-                  navigation.navigate("Notifications")
-                }
-              >
-                <Ionicons
-                  name="notifications-outline"
-                  size={21}
-                  color={COLORS.primary}
-                />
-              </TouchableOpacity>
+      {decisionCount > 0 && (
+        <View style={styles.counterBadge}>
+          <Text style={styles.counterText}>
+            {decisionCount > 99 ? "99+" : decisionCount}
+          </Text>
+        </View>
+      )}
+    </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.iconButton}
-                activeOpacity={0.8}
-                onPress={() =>
-                  navigation.navigate("Profile")
-                }
-              >
-                <Ionicons
-                  name="person-circle-outline"
-                  size={25}
-                  color={COLORS.primary}
-                />
-              </TouchableOpacity>
+    {/* Profile */}
+    <TouchableOpacity
+      style={styles.iconButton}
+      activeOpacity={0.8}
+      onPress={() => navigation.navigate("Profile")}
+    >
+      <Ionicons
+        name="person-circle-outline"
+        size={25}
+        color={COLORS.primary}
+      />
 
-            </View>
-          </View>
+      {decisionCount > 0 && (
+        <View style={styles.profileUpdateDot} />
+      )}
+    </TouchableOpacity>
+  </View>
+</View>
+
 
           {/* =================================================
               LICENCE & VEHICLE STATUS
@@ -177,12 +234,14 @@ export default function HomeScreen() {
 
           <DriverLicenseCard />
 
-          <OutstandingAmountCard
-            citizenId="1000000000007"
-            onPress={() =>
-              navigation.navigate("OutstandingPenalties")
-            }
-          />
+         {!authLoading && user?.id ? (
+  <OutstandingAmountCard
+    citizenId={user.id}
+    onPress={() =>
+      navigation.navigate("OutstandingPenalties")
+    }
+  />
+) : null}
 
           <NextAppointmentCard
             onPress={() =>
@@ -211,15 +270,8 @@ export default function HomeScreen() {
               ROAD CLOSURES
           ================================================= */}
 
-          <SectionHeader
-            title="Road Closures"
-            description="Important road closure information in your area."
-            icon="warning-outline"
-          />
-
-          <View style={styles.componentCard}>
-            <TrafficIncidents />
-          </View>
+         
+       
 
           {/* =================================================
               WEATHER
@@ -234,7 +286,9 @@ export default function HomeScreen() {
           <View style={styles.componentCard}>
             <WeatherAlerts />
           </View>
-
+   <View style={styles.componentCard}>
+            <TrafficIncidents />
+          </View>
           {/* =================================================
               RECENT NOTIFICATIONS
           ================================================= */}
@@ -823,4 +877,40 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: COLORS.text,
   },
+ 
+
+
+counterBadge: {
+  position: "absolute",
+  top: -5,
+  right: -5,
+  minWidth: 18,
+  height: 18,
+  paddingHorizontal: 4,
+  borderRadius: 9,
+  backgroundColor: "#D92D20",
+  alignItems: "center",
+  justifyContent: "center",
+  borderWidth: 2,
+  borderColor: COLORS.background,
+},
+
+counterText: {
+  color: "#FFFFFF",
+  fontSize: 9,
+  fontWeight: "800",
+},
+
+profileUpdateDot: {
+  position: "absolute",
+  top: 3,
+  right: 3,
+  width: 9,
+  height: 9,
+  borderRadius: 5,
+  backgroundColor: "#D92D20",
+  borderWidth: 1,
+  borderColor: COLORS.card,
+},
+
 });

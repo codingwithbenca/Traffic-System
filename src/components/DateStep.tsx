@@ -31,62 +31,74 @@ interface DateStepProps {
 }
 
 /* =========================================================
-   TEMPORARY AVAILABILITY
+   DATE HELPERS
 ========================================================= */
 
-/*
- * Temporary data.
- *
- * Later this will come from Firebase/API based on:
- *
- * selected service
- * selected branch
- *
- * Example:
- *
- * branch + service
- *       ↓
- * available dates
- */
+// Formats a date using local device time, not UTC.
+// This avoids dates shifting because of timezone conversion.
+const formatLocalDate = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
 
-const AVAILABLE_DATES: AppointmentDateAvailability[] = [
-  {
-    date: "2026-08-11",
-    slots: 15,
-  },
-  {
-    date: "2026-08-12",
-    slots: 3,
-  },
-  {
-    date: "2026-08-14",
-    slots: 10,
-  },
-  {
-    date: "2026-08-18",
-    slots: 8,
-  },
-  {
-    date: "2026-08-19",
-    slots: 12,
-  },
-  {
-    date: "2026-08-21",
-    slots: 5,
-  },
-  {
-    date: "2026-08-25",
-    slots: 14,
-  },
-  {
-    date: "2026-08-26",
-    slots: 7,
-  },
-  {
-    date: "2026-08-28",
-    slots: 11,
-  },
-];
+  return `${year}-${month}-${day}`;
+};
+
+const getDateAfterDays = (
+  todayString: string,
+  daysToAdd: number
+): string => {
+  const [year, month, day] = todayString.split("-").map(Number);
+
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + daysToAdd);
+
+  return formatLocalDate(date);
+};
+
+const formatAppointmentDate = (dateString: string): string => {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return date.toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+};
+
+/* =========================================================
+   TEMPORARY DEMO AVAILABILITY
+
+   These dates are generated relative to TODAY so the demo
+   does not become outdated.
+
+   IMPORTANT:
+   These are sample dates, not real Firebase availability.
+   We will connect actual branch/service availability later.
+========================================================= */
+
+const createTemporaryAvailability = (
+  todayString: string
+): AppointmentDateAvailability[] => {
+  const sampleDates = [
+    { days: 1, slots: 15 },
+    { days: 2, slots: 3 },
+    { days: 4, slots: 10 },
+    { days: 8, slots: 8 },
+    { days: 9, slots: 12 },
+    { days: 11, slots: 5 },
+    { days: 15, slots: 14 },
+    { days: 16, slots: 7 },
+    { days: 18, slots: 11 },
+  ];
+
+  return sampleDates.map((item) => ({
+    date: getDateAfterDays(todayString, item.days),
+    slots: item.slots,
+  }));
+};
 
 /* =========================================================
    COMPONENT
@@ -97,43 +109,43 @@ export default function DateStep({
   selectedDate,
   onSelectDate,
 }: DateStepProps) {
+  // Recalculate the current date from the device's local date.
+  const todayString = formatLocalDate(new Date());
+
+  // Start the calendar in the current month automatically.
   const [visibleMonth, setVisibleMonth] = useState(
-    "2026-08-01"
+    () => `${todayString.slice(0, 7)}-01`
   );
 
-  /* =======================================================
-     TODAY
-  ======================================================= */
-
-  const today = new Date();
-
-  const todayString = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, "0"),
-    String(today.getDate()).padStart(2, "0"),
-  ].join("-");
+  // Temporary dates move forward with the current date.
+  const availableDates = useMemo(
+    () => createTemporaryAvailability(todayString),
+    [todayString]
+  );
 
   /* =======================================================
      AVAILABILITY MAP
   ======================================================= */
 
   const availabilityMap = useMemo(() => {
-    return AVAILABLE_DATES.reduce(
-      (
-        accumulator,
-        availability
-      ) => {
-        accumulator[availability.date] =
-          availability;
-
-        return accumulator;
+    return availableDates.reduce(
+      (result, availability) => {
+        result[availability.date] = availability;
+        return result;
       },
-      {} as Record<
-        string,
-        AppointmentDateAvailability
-      >
+      {} as Record<string, AppointmentDateAvailability>
     );
-  }, []);
+  }, [availableDates]);
+
+  // Only dates today or later with available slots are selectable.
+  const selectableDates = useMemo(
+    () =>
+      availableDates.filter(
+        (item) =>
+          item.date >= todayString && item.slots > 0
+      ),
+    [availableDates, todayString]
+  );
 
   /* =======================================================
      MARKED DATES
@@ -142,61 +154,43 @@ export default function DateStep({
   const markedDates = useMemo(() => {
     const marks: Record<string, any> = {};
 
-    AVAILABLE_DATES.forEach(
-      (availability) => {
-        const isSelected =
-          selectedDate === availability.date;
+    selectableDates.forEach((availability) => {
+      const isSelected = selectedDate === availability.date;
 
-        marks[availability.date] = {
-          marked: true,
-          dotColor: "#16A34A",
-
-          selected: isSelected,
-
-          selectedColor: "#2563EB",
-
-          customStyles: {
-            container: {
-              backgroundColor: isSelected
-                ? "#2563EB"
-                : "#FFFFFF",
-            },
-
-            text: {
-              color: isSelected
-                ? "#FFFFFF"
-                : "#1E293B",
-              fontWeight: "600",
-            },
+      marks[availability.date] = {
+        marked: true,
+        dotColor: "#16A34A",
+        selected: isSelected,
+        selectedColor: "#2563EB",
+        customStyles: {
+          container: {
+            backgroundColor: isSelected ? "#2563EB" : "#FFFFFF",
           },
-        };
-      }
-    );
+          text: {
+            color: isSelected ? "#FFFFFF" : "#1E293B",
+            fontWeight: "600",
+          },
+        },
+      };
+    });
 
     return marks;
-  }, [selectedDate]);
+  }, [selectableDates, selectedDate]);
 
   /* =======================================================
      SELECT DATE
   ======================================================= */
 
   const handleDayPress = (day: DateData) => {
-    const availability =
-      availabilityMap[day.dateString];
-
-    /*
-     * Do nothing if the date has no available slots.
-     */
-
-    if (!availability) {
+    // Never allow a date before today's local date.
+    if (day.dateString < todayString) {
       return;
     }
 
-    /*
-     * Do nothing if the day has zero slots.
-     */
+    const availability = availabilityMap[day.dateString];
 
-    if (availability.slots <= 0) {
+    // The selected date must have available appointment slots.
+    if (!availability || availability.slots <= 0) {
       return;
     }
 
@@ -204,31 +198,11 @@ export default function DateStep({
   };
 
   /* =======================================================
-     FORMAT DATE
-  ======================================================= */
-
-  const formatDate = (date: string) => {
-    const parsedDate = new Date(
-      `${date}T00:00:00`
-    );
-
-    return parsedDate.toLocaleDateString(
-      "en-ZA",
-      {
-        weekday: "long",
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-      }
-    );
-  };
-
-  /* =======================================================
      SELECTED DATE INFORMATION
   ======================================================= */
 
   const selectedAvailability =
-    selectedDate
+    selectedDate && selectedDate >= todayString
       ? availabilityMap[selectedDate]
       : null;
 
@@ -241,14 +215,8 @@ export default function DateStep({
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.content}
     >
-      {/* ===================================================
-          INTRODUCTION
-      =================================================== */}
-
       <View style={styles.introduction}>
-        <Text style={styles.title}>
-          Choose a date
-        </Text>
+        <Text style={styles.title}>Choose a date</Text>
 
         <Text style={styles.description}>
           Select an available date for your appointment
@@ -256,9 +224,7 @@ export default function DateStep({
         </Text>
       </View>
 
-      {/* ===================================================
-          SELECTED BRANCH
-      =================================================== */}
+      {/* SELECTED BRANCH */}
 
       {selectedBranch && (
         <View style={styles.branchCard}>
@@ -282,20 +248,17 @@ export default function DateStep({
         </View>
       )}
 
-      {/* ===================================================
-          CALENDAR
-      =================================================== */}
+      {/* CALENDAR */}
 
       <View style={styles.calendarCard}>
         <View style={styles.calendarHeader}>
-          <View>
+          <View style={styles.calendarHeading}>
             <Text style={styles.calendarTitle}>
               Available dates
             </Text>
 
             <Text style={styles.calendarSubtitle}>
-              Green dots indicate available
-              appointments
+              Green dots indicate dates with available slots
             </Text>
           </View>
 
@@ -313,48 +276,35 @@ export default function DateStep({
           minDate={todayString}
           onDayPress={handleDayPress}
           onMonthChange={(month) => {
-            setVisibleMonth(month.dateString);
+            setVisibleMonth(
+              `${month.year}-${String(month.month).padStart(2, "0")}-01`
+            );
           }}
           markedDates={markedDates}
+          markingType="custom"
           enableSwipeMonths
           hideExtraDays={false}
           theme={{
             backgroundColor: "#FFFFFF",
             calendarBackground: "#FFFFFF",
-
             textSectionTitleColor: "#64748B",
-
-            selectedDayBackgroundColor:
-              "#2563EB",
-
-            selectedDayTextColor:
-              "#FFFFFF",
-
+            selectedDayBackgroundColor: "#2563EB",
+            selectedDayTextColor: "#FFFFFF",
             todayTextColor: "#2563EB",
-
             dayTextColor: "#1E293B",
-
             textDisabledColor: "#CBD5E1",
-
             arrowColor: "#2563EB",
-
             monthTextColor: "#111827",
-
             textMonthFontWeight: "700",
-
             textDayFontSize: 14,
-
             textMonthFontSize: 16,
-
             textDayHeaderFontSize: 12,
           }}
           style={styles.calendar}
         />
       </View>
 
-      {/* ===================================================
-          AVAILABLE DATE LIST
-      =================================================== */}
+      {/* QUICK DATE SELECTION */}
 
       <View style={styles.availableSection}>
         <View style={styles.sectionHeader}>
@@ -369,153 +319,133 @@ export default function DateStep({
           </View>
 
           <Text style={styles.dateCount}>
-            {AVAILABLE_DATES.length} dates
+            {selectableDates.length} dates
           </Text>
         </View>
 
-        <View style={styles.dateList}>
-          {AVAILABLE_DATES.map(
-            (availability) => {
+        {selectableDates.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Ionicons
+              name="calendar-outline"
+              size={30}
+              color="#64748B"
+            />
+
+            <Text style={styles.emptyTitle}>
+              No dates available
+            </Text>
+
+            <Text style={styles.emptyDescription}>
+              There are currently no appointment dates available.
+              Please check again later.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.dateList}>
+            {selectableDates.map((availability) => {
               const selected =
-                selectedDate ===
-                availability.date;
+                selectedDate === availability.date;
 
               return (
                 <TouchableOpacity
                   key={availability.date}
                   activeOpacity={0.8}
-                  onPress={() =>
-                    onSelectDate(
-                      availability.date
-                    )
-                  }
+                  onPress={() => {
+                    // Apply the same validation as the calendar.
+                    if (availability.date < todayString) {
+                      return;
+                    }
+
+                    if (availability.slots <= 0) {
+                      return;
+                    }
+
+                    onSelectDate(availability.date);
+                  }}
                   style={[
                     styles.dateCard,
-                    selected &&
-                      styles.dateCardSelected,
+                    selected && styles.dateCardSelected,
                   ]}
                 >
-                  {/* ---------------------------------------
-                      DATE ICON
-                  --------------------------------------- */}
-
                   <View
                     style={[
                       styles.dateIcon,
-                      selected &&
-                        styles.dateIconSelected,
+                      selected && styles.dateIconSelected,
                     ]}
                   >
                     <Ionicons
                       name="calendar-outline"
                       size={20}
-                      color={
-                        selected
-                          ? "#FFFFFF"
-                          : "#2563EB"
-                      }
+                      color={selected ? "#FFFFFF" : "#2563EB"}
                     />
                   </View>
 
-                  {/* ---------------------------------------
-                      DATE INFORMATION
-                  --------------------------------------- */}
-
-                  <View
-                    style={styles.dateInformation}
-                  >
+                  <View style={styles.dateInformation}>
                     <Text
                       style={[
                         styles.dateText,
-                        selected &&
-                          styles.dateTextSelected,
+                        selected && styles.dateTextSelected,
                       ]}
                     >
-                      {formatDate(
-                        availability.date
-                      )}
+                      {formatAppointmentDate(availability.date)}
                     </Text>
 
                     <Text
                       style={[
                         styles.slotsText,
-                        selected &&
-                          styles.slotsTextSelected,
+                        selected && styles.slotsTextSelected,
                       ]}
                     >
                       {availability.slots}{" "}
-                      {availability.slots === 1
-                        ? "slot"
-                        : "slots"}{" "}
+                      {availability.slots === 1 ? "slot" : "slots"}{" "}
                       available
                     </Text>
                   </View>
 
-                  {/* ---------------------------------------
-                      RADIO
-                  --------------------------------------- */}
-
                   <View
                     style={[
                       styles.radioOuter,
-                      selected &&
-                        styles.radioOuterSelected,
+                      selected && styles.radioOuterSelected,
                     ]}
                   >
                     {selected && (
-                      <View
-                        style={styles.radioInner}
-                      />
+                      <View style={styles.radioInner} />
                     )}
                   </View>
                 </TouchableOpacity>
               );
-            }
-          )}
-        </View>
-      </View>
-
-      {/* ===================================================
-          SELECTED DATE SUMMARY
-      =================================================== */}
-
-      {selectedDate &&
-        selectedAvailability && (
-          <View style={styles.selectedCard}>
-            <View style={styles.selectedIcon}>
-              <Ionicons
-                name="checkmark"
-                size={18}
-                color="#FFFFFF"
-              />
-            </View>
-
-            <View
-              style={styles.selectedInformation}
-            >
-              <Text
-                style={styles.selectedLabel}
-              >
-                Selected appointment date
-              </Text>
-
-              <Text
-                style={styles.selectedDate}
-              >
-                {formatDate(selectedDate)}
-              </Text>
-
-              <Text
-                style={styles.selectedSlots}
-              >
-                {
-                  selectedAvailability.slots
-                }{" "}
-                appointment slots available
-              </Text>
-            </View>
+            })}
           </View>
         )}
+      </View>
+
+      {/* SELECTED DATE SUMMARY */}
+
+      {selectedDate && selectedAvailability && (
+        <View style={styles.selectedCard}>
+          <View style={styles.selectedIcon}>
+            <Ionicons
+              name="checkmark"
+              size={18}
+              color="#FFFFFF"
+            />
+          </View>
+
+          <View style={styles.selectedInformation}>
+            <Text style={styles.selectedLabel}>
+              Selected appointment date
+            </Text>
+
+            <Text style={styles.selectedDate}>
+              {formatAppointmentDate(selectedDate)}
+            </Text>
+
+            <Text style={styles.selectedSlots}>
+              {selectedAvailability.slots} appointment slots available
+            </Text>
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -528,10 +458,6 @@ const styles = StyleSheet.create({
   content: {
     paddingBottom: 30,
   },
-
-  /* -------------------------------------------------------
-     INTRODUCTION
-  ------------------------------------------------------- */
 
   introduction: {
     marginBottom: 20,
@@ -549,10 +475,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: "#64748B",
   },
-
-  /* -------------------------------------------------------
-     BRANCH
-  ------------------------------------------------------- */
 
   branchCard: {
     flexDirection: "row",
@@ -591,10 +513,6 @@ const styles = StyleSheet.create({
     color: "#1E293B",
   },
 
-  /* -------------------------------------------------------
-     CALENDAR
-  ------------------------------------------------------- */
-
   calendarCard: {
     borderWidth: 1,
     borderColor: "#E2E8F0",
@@ -610,6 +528,11 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#F1F5F9",
+  },
+
+  calendarHeading: {
+    flex: 1,
+    paddingRight: 8,
   },
 
   calendarTitle: {
@@ -650,10 +573,6 @@ const styles = StyleSheet.create({
   calendar: {
     paddingBottom: 10,
   },
-
-  /* -------------------------------------------------------
-     AVAILABLE DATES
-  ------------------------------------------------------- */
 
   availableSection: {
     marginTop: 20,
@@ -703,10 +622,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8FAFF",
   },
 
-  /* -------------------------------------------------------
-     DATE ICON
-  ------------------------------------------------------- */
-
   dateIcon: {
     width: 42,
     height: 42,
@@ -720,10 +635,6 @@ const styles = StyleSheet.create({
   dateIconSelected: {
     backgroundColor: "#2563EB",
   },
-
-  /* -------------------------------------------------------
-     DATE INFORMATION
-  ------------------------------------------------------- */
 
   dateInformation: {
     flex: 1,
@@ -750,10 +661,6 @@ const styles = StyleSheet.create({
     color: "#2563EB",
   },
 
-  /* -------------------------------------------------------
-     RADIO
-  ------------------------------------------------------- */
-
   radioOuter: {
     width: 22,
     height: 22,
@@ -774,10 +681,6 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: "#2563EB",
   },
-
-  /* -------------------------------------------------------
-     SELECTED SUMMARY
-  ------------------------------------------------------- */
 
   selectedCard: {
     flexDirection: "row",
@@ -821,5 +724,28 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#16A34A",
   },
-});
 
+  emptyCard: {
+    alignItems: "center",
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+  },
+
+  emptyTitle: {
+    marginTop: 10,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1E293B",
+  },
+
+  emptyDescription: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    color: "#64748B",
+  },
+});

@@ -8,20 +8,143 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
+
 import { db } from "../services/firebase";
 
 type Fine = {
   fineId?: string;
+  ticketId?: string;
+  reference?: string;
   offence?: string;
+  description?: string;
+  category?: string;
+  type?: string;
   amount?: number | string;
+  fineAmount?: number | string;
+  outstandingAmount?: number | string;
   status?: string;
+  paymentStatus?: string;
+  citizenId?: string;
+  date?: string;
+  createdAt?: unknown;
+};
+
+type FineRecord = Fine & {
+  documentId?: string;
+  allowMissingStatus?: boolean;
 };
 
 type OutstandingAmountCardProps = {
   citizenId: string;
   onPress?: () => void;
 };
+
+const COLORS = {
+  primary: "#0B4F8A",
+  primaryDark: "#083B68",
+  background: "#FFFFFF",
+  softBlue: "#EAF3FA",
+  text: "#17212B",
+  muted: "#66737F",
+  border: "#E1E8EF",
+  danger: "#B42318",
+  dangerBackground: "#FEF3F2",
+  success: "#18794E",
+  successBackground: "#ECFDF3",
+};
+
+const normalizeStatus = (value: unknown): string =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+
+const getFineStatus = (fine: FineRecord): string[] =>
+  [fine.paymentStatus, fine.status]
+    .filter(
+      (value) =>
+        value !== undefined &&
+        value !== null &&
+        String(value).trim() !== ""
+    )
+    .map(normalizeStatus);
+
+const isOutstandingFine = (fine: FineRecord): boolean => {
+  const statuses = getFineStatus(fine);
+
+  if (statuses.includes("disputed")) {
+    return false;
+  }
+
+  const excludedStatuses = [
+    "paid",
+    "settled",
+    "completed",
+    "cancelled",
+    "canceled",
+    "void",
+    "voided",
+    "waived",
+  ];
+
+  if (statuses.some((status) => excludedStatuses.includes(status))) {
+    return false;
+  }
+
+  const payableStatuses = [
+    "outstanding",
+    "unpaid",
+    "overdue",
+  ];
+
+  if (statuses.some((status) => payableStatuses.includes(status))) {
+    return true;
+  }
+
+  return (
+    statuses.length === 0 &&
+    fine.allowMissingStatus === true
+  );
+};
+
+const getFineAmount = (fine: FineRecord): number => {
+  const rawAmount =
+    fine.outstandingAmount ??
+    fine.amount ??
+    fine.fineAmount ??
+    0;
+
+  const amount =
+    typeof rawAmount === "number"
+      ? rawAmount
+      : Number(rawAmount);
+
+  return Number.isFinite(amount) && amount > 0
+    ? amount
+    : 0;
+};
+
+const getFineIdentifiers = (fine: FineRecord): string[] =>
+  [
+    fine.documentId,
+    fine.fineId,
+    fine.ticketId,
+    fine.reference,
+  ]
+    .filter(
+      (value): value is string =>
+        typeof value === "string" &&
+        value.trim().length > 0
+    )
+    .map((value) => value.trim().toLowerCase());
 
 export default function OutstandingAmountCard({
   citizenId,
@@ -30,68 +153,120 @@ export default function OutstandingAmountCard({
   const [total, setTotal] = useState(0);
   const [fineCount, setFineCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
-    loadOutstandingFines();
-  }, [citizenId]);
+    let active = true;
 
-  const loadOutstandingFines = async () => {
-    try {
-      setLoading(true);
-
-      const citizenRef = doc(db, "citizens", citizenId);
-      const snapshot = await getDoc(citizenRef);
-
-      if (!snapshot.exists()) {
+    const loadOutstandingFines = async () => {
+      if (!citizenId.trim()) {
         setTotal(0);
         setFineCount(0);
+        setLoading(false);
+        setLoadFailed(false);
         return;
       }
 
-      const data = snapshot.data();
+      try {
+        setLoading(true);
+        setLoadFailed(false);
 
-      const fines: Fine[] = Array.isArray(data.fines)
-        ? data.fines
-        : [];
-
-      const outstandingFines = fines.filter((fine) => {
-        const status = String(
-          fine.status ?? "Outstanding"
-        ).toLowerCase();
-
-        return (
-          status === "outstanding" ||
-          status === "unpaid" ||
-          status === "overdue"
+        // Load fines belonging to this citizen.
+        const finesQuery = query(
+          collection(db, "fines"),
+          where("citizenId", "==", citizenId)
         );
-      });
 
-      const amount = outstandingFines.reduce(
-        (sum, fine) => {
-          const value =
-            typeof fine.amount === "number"
-              ? fine.amount
-              : Number(fine.amount ?? 0);
+        const finesSnapshot = await getDocs(finesQuery);
 
-          return sum + (Number.isFinite(value) ? value : 0);
-        },
-        0
-      );
+        const allFines: FineRecord[] =
+          finesSnapshot.docs.map((fineDocument) => ({
+            ...(fineDocument.data() as Fine),
+            documentId: fineDocument.id,
+            allowMissingStatus: false,
+          }));
 
-      setTotal(amount);
-      setFineCount(outstandingFines.length);
-    } catch (error) {
-      console.error(
-        "Failed to load outstanding fines:",
-        error
-      );
+        // Keep support for older embedded citizen records.
+        const citizenSnapshot = await getDoc(
+          doc(db, "citizens", citizenId)
+        );
 
-      setTotal(0);
-      setFineCount(0);
-    } finally {
-      setLoading(false);
-    }
-  };
+        if (citizenSnapshot.exists()) {
+          const citizenData = citizenSnapshot.data();
+
+          const embeddedFines: Fine[] = Array.isArray(
+            citizenData.fines
+          )
+            ? citizenData.fines
+            : [];
+
+          allFines.push(
+            ...embeddedFines.map((fine) => ({
+              ...fine,
+              allowMissingStatus: true,
+            }))
+          );
+        }
+
+        // Prevent the same fine from being counted twice.
+        const seenIdentifiers = new Set<string>();
+        const uniqueFines: FineRecord[] = [];
+
+        for (const fine of allFines) {
+          const identifiers = getFineIdentifiers(fine);
+
+          const alreadyExists = identifiers.some((identifier) =>
+            seenIdentifiers.has(identifier)
+          );
+
+          if (alreadyExists) {
+            continue;
+          }
+
+          uniqueFines.push(fine);
+
+          identifiers.forEach((identifier) =>
+            seenIdentifiers.add(identifier)
+          );
+        }
+
+        const outstandingFines = uniqueFines.filter(
+          isOutstandingFine
+        );
+
+        const amount = outstandingFines.reduce(
+          (sum, fine) => sum + getFineAmount(fine),
+          0
+        );
+
+        if (active) {
+          setTotal(amount);
+          setFineCount(outstandingFines.length);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to load outstanding fines:",
+          error
+        );
+
+        if (active) {
+          setTotal(0);
+          setFineCount(0);
+          setLoadFailed(true);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadOutstandingFines();
+
+    return () => {
+      active = false;
+    };
+  }, [citizenId]);
 
   const formattedAmount = total.toLocaleString("en-ZA", {
     minimumFractionDigits: 2,
@@ -99,147 +274,242 @@ export default function OutstandingAmountCard({
   });
 
   const hasOutstanding = total > 0;
+  const hasFines = fineCount > 0;
 
   return (
     <TouchableOpacity
       style={styles.card}
-      activeOpacity={0.88}
+      activeOpacity={0.92}
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={
+        loading
+          ? "View outstanding fines"
+          : `Outstanding fines: ${formattedAmount} rand. View your fines`
+      }
     >
-      {/* =================================================
-          HEADER
-      ================================================= */}
-
+      {/* TOP HEADER */}
       <View style={styles.headerRow}>
         <View style={styles.iconBox}>
           <Ionicons
             name="wallet-outline"
-            size={23}
-            color={hasOutstanding ? "#B42318" : "#18794E"}
+            size={24}
+            color={COLORS.primary}
           />
         </View>
 
         <View style={styles.headerText}>
+          <Text style={styles.eyebrow}>
+            YOUR FINANCES
+          </Text>
+
           <Text style={styles.title}>
             Outstanding fines
           </Text>
 
           <Text style={styles.subtitle}>
-            Your current amount due
+            Your unpaid traffic fines in one place
           </Text>
         </View>
 
-        <View
-          style={[
-            styles.statusBadge,
-            hasOutstanding
-              ? styles.statusBadgeDanger
-              : styles.statusBadgeSuccess,
-          ]}
-        >
-          <View
-            style={[
-              styles.statusDot,
-              hasOutstanding
-                ? styles.statusDotDanger
-                : styles.statusDotSuccess,
-            ]}
-          />
-
-          <Text
-            style={[
-              styles.statusBadgeText,
-              hasOutstanding
-                ? styles.statusTextDanger
-                : styles.statusTextSuccess,
-            ]}
-          >
-            {hasOutstanding ? "Due" : "Clear"}
-          </Text>
-        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={21}
+          color={COLORS.muted}
+        />
       </View>
 
-      {/* =================================================
-          AMOUNT
-      ================================================= */}
+      {/* BALANCE PANEL */}
+      <View
+        style={[
+          styles.balancePanel,
+          !loading &&
+            !loadFailed &&
+            !hasOutstanding &&
+            styles.balancePanelClear,
+        ]}
+      >
+        <View style={styles.balanceTopRow}>
+          <Text style={styles.balanceLabel}>
+            {loadFailed
+              ? "BALANCE UNAVAILABLE"
+              : "TOTAL AMOUNT DUE"}
+          </Text>
 
-      <View style={styles.amountSection}>
-        <Text style={styles.amountLabel}>
-          YOU OWE
-        </Text>
-
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator
-              size="large"
-              color="#0B4F8A"
-            />
-          </View>
-        ) : (
-          <View style={styles.amountRow}>
-            <Text
+          {!loading && !loadFailed && (
+            <View
               style={[
-                styles.currency,
+                styles.statusBadge,
                 hasOutstanding
-                  ? styles.currencyDanger
-                  : styles.currencySuccess,
+                  ? styles.statusBadgeDue
+                  : styles.statusBadgeClear,
               ]}
             >
-              R
-            </Text>
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor: hasOutstanding
+                      ? COLORS.danger
+                      : COLORS.success,
+                  },
+                ]}
+              />
 
-            <Text style={styles.amount}>
-              {formattedAmount}
+              <Text
+                style={[
+                  styles.statusText,
+                  {
+                    color: hasOutstanding
+                      ? COLORS.danger
+                      : COLORS.success,
+                  },
+                ]}
+              >
+                {hasOutstanding ? "Payment due" : "All clear"}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {loading ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator
+              size="large"
+              color={COLORS.primary}
+            />
+            <Text style={styles.loadingText}>
+              Checking your fines...
             </Text>
           </View>
+        ) : loadFailed ? (
+          <View style={styles.errorRow}>
+            <Ionicons
+              name="cloud-offline-outline"
+              size={22}
+              color={COLORS.danger}
+            />
+            <Text style={styles.errorText}>
+              We couldn't load your balance. Tap to try again.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.amountRow}>
+              <Text
+                style={[
+                  styles.currency,
+                  {
+                    color: hasOutstanding
+                      ? COLORS.primary
+                      : COLORS.success,
+                  },
+                ]}
+              >
+                R
+              </Text>
+
+              <Text
+                adjustsFontSizeToFit
+                numberOfLines={1}
+                style={styles.amount}
+              >
+                {formattedAmount}
+              </Text>
+            </View>
+
+            <Text style={styles.balanceDescription}>
+              {hasOutstanding
+                ? "This is the amount still waiting to be paid."
+                : "You're all caught up. You have no unpaid fines."}
+            </Text>
+          </>
         )}
       </View>
 
-      {/* =================================================
-          FOOTER
-      ================================================= */}
-
-      {!loading && (
+      {/* BOTTOM SUMMARY */}
+      {!loading && !loadFailed && (
         <View style={styles.footer}>
           <View style={styles.fineInfo}>
-            <Ionicons
-              name={
-                hasOutstanding
-                  ? "alert-circle-outline"
-                  : "checkmark-circle-outline"
-              }
-              size={18}
-              color={
-                hasOutstanding
-                  ? "#B42318"
-                  : "#18794E"
-              }
-            />
-
-            <Text style={styles.fineInfoText}>
-              {hasOutstanding
-                ? `${fineCount} ${
-                    fineCount === 1
-                      ? "outstanding penalty"
-                      : "outstanding penalties"
-                  }`
-                : "You have no outstanding fines"}
-            </Text>
-          </View>
-
-          {hasOutstanding && (
-            <View style={styles.payButton}>
-              <Text style={styles.payButtonText}>
-                View & Pay
-              </Text>
-
+            <View
+              style={[
+                styles.fineInfoIcon,
+                {
+                  backgroundColor: hasOutstanding
+                    ? COLORS.dangerBackground
+                    : COLORS.successBackground,
+                },
+              ]}
+            >
               <Ionicons
-                name="arrow-forward"
-                size={16}
-                color="#FFFFFF"
+                name={
+                  hasOutstanding
+                    ? "receipt-outline"
+                    : "checkmark-circle-outline"
+                }
+                size={19}
+                color={
+                  hasOutstanding
+                    ? COLORS.danger
+                    : COLORS.success
+                }
               />
             </View>
-          )}
+
+            <View style={styles.fineInfoTextContainer}>
+              <Text style={styles.fineInfoTitle}>
+                {hasOutstanding
+                  ? `${fineCount} ${
+                      fineCount === 1 ? "fine" : "fines"
+                    } to settle`
+                  : "No payments needed"}
+              </Text>
+
+              <Text style={styles.fineInfoSubtitle}>
+                {hasOutstanding
+                  ? "Review the details and due dates"
+                  : "Your outstanding balance is zero"}
+              </Text>
+            </View>
+          </View>
+
+          <View
+            style={[
+              styles.actionButton,
+              !hasOutstanding && styles.actionButtonSecondary,
+            ]}
+          >
+            <Text
+              style={[
+                styles.actionButtonText,
+                !hasOutstanding && styles.actionButtonTextSecondary,
+              ]}
+            >
+              {hasOutstanding ? "View fines" : "View history"}
+            </Text>
+
+            <Ionicons
+              name="arrow-forward"
+              size={16}
+              color={
+                hasOutstanding ? "#FFFFFF" : COLORS.primary
+              }
+            />
+          </View>
+        </View>
+      )}
+
+      {/* SMALL HELP TEXT */}
+      {!loading && !loadFailed && hasFines && (
+        <View style={styles.helpRow}>
+          <Ionicons
+            name="information-circle-outline"
+            size={15}
+            color={COLORS.muted}
+          />
+          <Text style={styles.helpText}>
+            Tap this card to see your fine details.
+          </Text>
         </View>
       )}
     </TouchableOpacity>
@@ -247,87 +517,106 @@ export default function OutstandingAmountCard({
 }
 
 const styles = StyleSheet.create({
-  /* =====================================================
-     CARD
-  ===================================================== */
-
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 22,
-
+    backgroundColor: COLORS.background,
+    borderRadius: 18,
+    padding: 17,
+    marginBottom: 20,
     borderWidth: 1,
-    borderColor: "#D9E0E6",
-
-    shadowColor: "#000000",
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    borderColor: COLORS.border,
+    shadowColor: "#18364D",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
     elevation: 3,
-  }, 
-
-  /* =====================================================
-     HEADER
-  ===================================================== */
+  },
 
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: 17,
   },
 
   iconBox: {
     width: 48,
     height: 48,
     borderRadius: 14,
-
-    backgroundColor: "#F2F6FA",
-
+    backgroundColor: COLORS.softBlue,
     alignItems: "center",
     justifyContent: "center",
-
-    marginRight: 13,
+    marginRight: 12,
   },
 
   headerText: {
     flex: 1,
+    marginRight: 6,
+  },
+
+  eyebrow: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    color: COLORS.primary,
+    marginBottom: 4,
   },
 
   title: {
     fontSize: 17,
+    lineHeight: 22,
     fontWeight: "800",
-    color: "#17212B",
+    color: COLORS.text,
   },
 
   subtitle: {
     marginTop: 3,
-    fontSize: 13,
-    color: "#66737F",
+    fontSize: 11,
+    lineHeight: 16,
+    color: COLORS.muted,
   },
 
-  /* =====================================================
-     STATUS
-  ===================================================== */
+  balancePanel: {
+    backgroundColor: "#F4F8FC",
+    borderWidth: 1,
+    borderColor: "#E0EBF5",
+    borderRadius: 15,
+    padding: 16,
+  },
+
+  balancePanelClear: {
+    backgroundColor: "#F2FBF5",
+    borderColor: "#D6F0DF",
+  },
+
+  balanceTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 10,
+  },
+
+  balanceLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+    color: COLORS.muted,
+  },
 
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 20,
   },
 
-  statusBadgeDanger: {
-    backgroundColor: "#FEF3F2",
+  statusBadgeDue: {
+    backgroundColor: "#FCE8E6",
   },
 
-  statusBadgeSuccess: {
-    backgroundColor: "#ECFDF3",
+  statusBadgeClear: {
+    backgroundColor: "#DDF7E5",
   },
 
   statusDot: {
@@ -337,126 +626,147 @@ const styles = StyleSheet.create({
     marginRight: 5,
   },
 
-  statusDotDanger: {
-    backgroundColor: "#B42318",
-  },
-
-  statusDotSuccess: {
-    backgroundColor: "#18794E",
-  },
-
-  statusBadgeText: {
-    fontSize: 12,
+  statusText: {
+    fontSize: 10,
     fontWeight: "800",
-  },
-
-  statusTextDanger: {
-    color: "#B42318",
-  },
-
-  statusTextSuccess: {
-    color: "#18794E",
-  },
-
-  /* =====================================================
-     AMOUNT
-  ===================================================== */
-
-  amountSection: {
-    marginTop: 24,
-    paddingBottom: 20,
-  },
-
-  amountLabel: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    color: "#66737F",
-    marginBottom: 5,
   },
 
   amountRow: {
     flexDirection: "row",
     alignItems: "baseline",
+    marginTop: 1,
   },
 
   currency: {
-    fontSize: 25,
+    fontSize: 23,
     fontWeight: "800",
     marginRight: 5,
   },
 
-  currencyDanger: {
-    color: "#B42318",
-  },
-
-  currencySuccess: {
-    color: "#18794E",
-  },
-
   amount: {
-    fontSize: 40,
-    lineHeight: 46,
+    flexShrink: 1,
+    fontSize: 36,
+    lineHeight: 43,
     fontWeight: "900",
-    color: "#17212B",
-    letterSpacing: -1,
+    color: COLORS.text,
+    letterSpacing: -0.8,
+    fontVariant: ["tabular-nums"],
   },
 
-  loadingContainer: {
-    height: 46,
-    alignItems: "flex-start",
-    justifyContent: "center",
+  balanceDescription: {
+    marginTop: 7,
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.muted,
   },
 
-  /* =====================================================
-     FOOTER
-  ===================================================== */
+  loadingRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+
+  loadingText: {
+    fontSize: 13,
+    color: COLORS.muted,
+  },
+
+  errorRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+
+  errorText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: COLORS.danger,
+  },
 
   footer: {
-    borderTopWidth: 1,
-    borderTopColor: "#EDF0F2",
-
-    paddingTop: 15,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 10,
+    paddingTop: 15,
   },
 
   fineInfo: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    minWidth: 0,
+  },
+
+  fineInfoIcon: {
+    width: 37,
+    height: 37,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
+  },
+
+  fineInfoTextContainer: {
     flex: 1,
-    marginRight: 10,
+    minWidth: 0,
   },
 
-  fineInfoText: {
-    marginLeft: 7,
+  fineInfoTitle: {
     fontSize: 12,
-    color: "#66737F",
-    fontWeight: "600",
+    fontWeight: "800",
+    color: COLORS.text,
   },
 
-  payButton: {
-    minHeight: 38,
+  fineInfoSubtitle: {
+    marginTop: 3,
+    fontSize: 10,
+    lineHeight: 15,
+    color: COLORS.muted,
+  },
 
-    paddingHorizontal: 13,
-
-    borderRadius: 10,
-
-    backgroundColor: "#0B4F8A",
-
+  actionButton: {
+    minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 7,
+    paddingHorizontal: 12,
+    borderRadius: 11,
+    backgroundColor: COLORS.primary,
+  },
 
+  actionButtonSecondary: {
+    backgroundColor: COLORS.softBlue,
+  },
+
+  actionButtonText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+
+  actionButtonTextSecondary: {
+    color: COLORS.primary,
+  },
+
+  helpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#EDF0F2",
     gap: 6,
   },
 
-  payButtonText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "800",
+  helpText: {
+    flex: 1,
+    fontSize: 10,
+    lineHeight: 15,
+    color: COLORS.muted,
   },
 });
-

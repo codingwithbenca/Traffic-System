@@ -1,3 +1,4 @@
+
 import React from "react";
 import {
   View,
@@ -14,7 +15,7 @@ export default function VehicleInformationScreen() {
   if (!user) {
     return (
       <View style={styles.loading}>
-        <Text>Loading...</Text>
+        <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
   }
@@ -24,26 +25,43 @@ export default function VehicleInformationScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={{ paddingBottom: 40 }}
+      contentContainerStyle={styles.contentContainer}
+      showsVerticalScrollIndicator={false}
     >
-      <Text style={styles.title}>
-        Vehicle Information
-      </Text>
+      <View style={styles.titleSection}>
+        <View style={styles.titleIcon}>
+          <MaterialIcons
+            name="directions-car"
+            size={27}
+            color="#FFFFFF"
+          />
+        </View>
 
-      <Text style={styles.subtitle}>
-        View all vehicles registered under your profile.
-      </Text>
+        <Text style={styles.title}>
+          Vehicle Information
+        </Text>
+
+        <Text style={styles.subtitle}>
+          View all vehicles registered under your profile.
+        </Text>
+      </View>
 
       {vehicles.length === 0 ? (
         <View style={styles.emptyCard}>
-          <MaterialIcons
-            name="directions-car"
-            size={60}
-            color="#999"
-          />
+          <View style={styles.emptyIcon}>
+            <MaterialIcons
+              name="directions-car"
+              size={48}
+              color="#8A9BB0"
+            />
+          </View>
+
+          <Text style={styles.emptyTitle}>
+            No Vehicles Yet
+          </Text>
 
           <Text style={styles.emptyText}>
-            No vehicles found.
+            No vehicles are currently registered under your profile.
           </Text>
         </View>
       ) : (
@@ -53,21 +71,42 @@ export default function VehicleInformationScreen() {
             style={styles.card}
           >
             <View style={styles.header}>
-              <MaterialIcons
-                name="directions-car"
-                size={35}
-                color="#003366"
-              />
+              <View style={styles.vehicleIcon}>
+                <MaterialIcons
+                  name="directions-car"
+                  size={30}
+                  color="#003366"
+                />
+              </View>
 
-              <View style={{ marginLeft: 12 }}>
+              <View style={styles.vehicleHeading}>
                 <Text style={styles.vehicleName}>
                   {vehicle.make} {vehicle.model}
                 </Text>
 
-                <Text style={styles.reg}>
-                  {vehicle.registrationNumber}
-                </Text>
+                <View style={styles.registrationBadge}>
+                  <MaterialIcons
+                    name="confirmation-number"
+                    size={15}
+                    color="#003366"
+                  />
+
+                  <Text style={styles.reg}>
+                    {vehicle.registrationNumber || "-"}
+                  </Text>
+                </View>
               </View>
+            </View>
+
+            <View style={styles.sectionHeading}>
+              <MaterialIcons
+                name="info-outline"
+                size={18}
+                color="#003366"
+              />
+              <Text style={styles.sectionTitle}>
+                Vehicle Details
+              </Text>
             </View>
 
             <Row
@@ -77,7 +116,7 @@ export default function VehicleInformationScreen() {
 
             <Row
               label="Year"
-              value={String(vehicle.year)}
+              value={String(vehicle.year ?? "-")}
             />
 
             <Row
@@ -95,6 +134,17 @@ export default function VehicleInformationScreen() {
               value={vehicle.engineNumber}
             />
 
+            <View style={styles.sectionHeading}>
+              <MaterialIcons
+                name="description"
+                size={18}
+                color="#003366"
+              />
+              <Text style={styles.sectionTitle}>
+                Licence Disk
+              </Text>
+            </View>
+
             <Row
               label="Licence Disk"
               value={vehicle.licenceDisk?.number}
@@ -110,40 +160,35 @@ export default function VehicleInformationScreen() {
               value={vehicle.licenceDisk?.status}
             />
 
+            <View style={styles.sectionHeading}>
+              <MaterialIcons
+                name="verified-user"
+                size={18}
+                color="#003366"
+              />
+              <Text style={styles.sectionTitle}>
+                Compliance & Ownership
+              </Text>
+            </View>
+
             <Row
               label="Roadworthy"
-              value={
-                vehicle.roadworthy
-                  ? "Yes"
-                  : "No"
-              }
+              value={vehicle.roadworthy ? "Yes" : "No"}
             />
 
             <Row
               label="Owner"
-              value={
-                vehicle.ownership?.owner
-                  ? "Yes"
-                  : "No"
-              }
+              value={vehicle.ownership?.owner ? "Yes" : "No"}
             />
 
             <Row
               label="Financed"
-              value={
-                vehicle.ownership?.financed
-                  ? "Yes"
-                  : "No"
-              }
+              value={vehicle.ownership?.financed ? "Yes" : "No"}
             />
 
             <Row
               label="Reported Stolen"
-              value={
-                vehicle.stolen
-                  ? "Yes"
-                  : "No"
-              }
+              value={vehicle.stolen ? "Yes" : "No"}
             />
           </View>
         ))
@@ -175,81 +220,190 @@ function Row({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F7FA",
+    backgroundColor: "#F3F6FA",
+  },
+
+  contentContainer: {
     padding: 20,
+    paddingBottom: 40,
   },
 
   loading: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "#F3F6FA",
+  },
+
+  loadingText: {
+    fontSize: 15,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+
+  titleSection: {
+    marginBottom: 25,
+  },
+
+  titleIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: "#003366",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 15,
   },
 
   title: {
-    fontSize: 28,
-    fontWeight: "bold",
+    fontSize: 27,
+    fontWeight: "800",
     color: "#003366",
+    letterSpacing: -0.5,
   },
 
   subtitle: {
-    color: "#666",
-    marginTop: 5,
-    marginBottom: 20,
+    color: "#64748B",
+    marginTop: 7,
+    fontSize: 14,
+    lineHeight: 21,
   },
 
   emptyCard: {
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    padding: 40,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingHorizontal: 28,
+    paddingVertical: 38,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E8EDF4",
+  },
+
+  emptyIcon: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: "#F0F4F9",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 18,
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#003366",
+    marginBottom: 8,
   },
 
   emptyText: {
-    marginTop: 15,
-    color: "#666",
-    fontSize: 16,
+    color: "#718096",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
   },
 
   card: {
-    backgroundColor: "#fff",
-    borderRadius: 15,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
     padding: 18,
     marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E8EDF4",
     elevation: 3,
+    shadowColor: "#003366",
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
   },
 
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 24,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EDF1F6",
+  },
+
+  vehicleIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 17,
+    backgroundColor: "#EAF1FA",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  vehicleHeading: {
+    flex: 1,
+    marginLeft: 14,
   },
 
   vehicleName: {
-    fontSize: 20,
-    fontWeight: "bold",
+    fontSize: 19,
+    fontWeight: "800",
     color: "#003366",
+    marginBottom: 7,
+  },
+
+  registrationBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#F0F5FB",
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    gap: 5,
   },
 
   reg: {
-    color: "#666",
-    marginTop: 2,
+    color: "#003366",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  sectionHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 5,
+    marginBottom: 7,
+    paddingTop: 9,
+    gap: 8,
+  },
+
+  sectionTitle: {
+    color: "#003366",
+    fontSize: 14,
+    fontWeight: "800",
   },
 
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 10,
+    alignItems: "flex-start",
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#EEE",
+    borderBottomColor: "#F0F2F6",
+    gap: 12,
   },
 
   label: {
-    color: "#666",
-    fontWeight: "600",
+    color: "#718096",
+    fontSize: 13,
+    fontWeight: "500",
+    flex: 1,
   },
 
   value: {
+    fontSize: 13,
     fontWeight: "700",
-    color: "#111",
+    color: "#172B4D",
+    flex: 1,
+    textAlign: "right",
   },
 });
