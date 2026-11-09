@@ -139,7 +139,7 @@ export default function MyAppointments() {
     );
   }, [appointments]);
 
-  /* =======================================================
+    /* =======================================================
      CANCEL APPOINTMENT
   ======================================================= */
 
@@ -161,36 +161,38 @@ export default function MyAppointments() {
             try {
               setCancelling(true);
 
+              const userId = await AsyncStorage.getItem("userId");
+
+              if (!userId) {
+                throw new Error(
+                  "No logged-in citizen found. Please sign in again."
+                );
+              }
+
               console.log(
-                "[MyAppointments] Cancelling:",
+                "[MyAppointments] CANCELLATION REQUEST",
                 appointment.id
               );
 
-              await cancelAppointment(
-                appointment.id
-              );
-
-              console.log(
-                "[MyAppointments] ✅ Appointment cancelled"
-              );
+              await cancelAppointment({
+                appointmentId: appointment.id,
+                userId,
+                citizenId: userId,
+                reason: "Cancelled by citizen",
+                actionId: `cancel_${appointment.id}_${Date.now()}`,
+              });
 
               setAppointments((current) =>
                 current.map((item) =>
                   item.id === appointment.id
-                    ? {
-                        ...item,
-                        status: "cancelled",
-                      }
+                    ? { ...item, status: "cancelled" }
                     : item
                 )
               );
 
               setSelectedAppointment((current) =>
                 current?.id === appointment.id
-                  ? {
-                      ...current,
-                      status: "cancelled",
-                    }
+                  ? { ...current, status: "cancelled" }
                   : current
               );
 
@@ -206,7 +208,9 @@ export default function MyAppointments() {
 
               Alert.alert(
                 "Error",
-                "We couldn't cancel this appointment."
+                error instanceof Error
+                  ? error.message
+                  : "We couldn't cancel this appointment."
               );
             } finally {
               setCancelling(false);

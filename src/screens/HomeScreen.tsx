@@ -23,7 +23,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-
+import AppointmentToast from "../components/AppointmentToast";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 
@@ -292,7 +292,7 @@ useEffect(() => {
           {/* =================================================
               RECENT NOTIFICATIONS
           ================================================= */}
-
+<AppointmentToast />
           <SectionHeader
             title="Recent Notifications"
             description="Recent updates and information from the department."

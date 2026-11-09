@@ -1,3 +1,4 @@
+
 import React, {
   createContext,
   useContext,
@@ -21,53 +22,40 @@ export type CitizenFine = {
   email?: string;
   type: string;
   category: string;
-
   offence: string;
   description?: string;
-
   date: string;
   issuedAt?: string;
   offenceDate?: string;
-
   location: string;
   cameraLocation?: string;
-
   vehicleId: string;
   registrationNumber: string;
-
   recordedSpeed?: number;
   speed?: number;
   speedLimit?: number;
-
   amount: number;
   fineAmount?: number;
   outstandingAmount?: number;
-
   status: "Outstanding" | "Paid" | "Disputed";
-
   paymentStatus: "Unpaid" | "Paid" | "Disputed";
-
   dueDate: string;
-
   paymentReference?: string;
   paidAt?: string;
-
   createdAt?: string;
 };
 
 /* =========================================================
-   VEHICLE
+   VEHICLE TYPE
 ========================================================= */
 
 export type CitizenVehicle = {
   vehicleId: string;
   registrationNumber: string;
-
   make: string;
   model: string;
   year: number;
   colour: string;
-
   vin: string;
   engineNumber: string;
 
@@ -87,29 +75,32 @@ export type CitizenVehicle = {
 };
 
 /* =========================================================
-   CITIZEN USER
+   CITIZEN USER TYPE
 ========================================================= */
 
 export type CitizenUser = {
-   id: string;
+ id: string;
   phone: string;
- 
   verified: boolean;
 
   fullName?: string;
+  email?: string;
   idNumber?: string;
-
   accountStatus?: string;
-
   biometricEnabled?: boolean;
-
   vehicleCount?: number;
 
   devices?: any;
 
-  /* =======================================================
-     DRIVER LICENSE
-  ======================================================= */
+  // New device registration fields
+  registeredDeviceId?: string;
+
+  registeredDevice?: {
+    deviceId?: string;
+    model?: string;
+    os?: string;
+    osVersion?: string;
+  };
 
   driverLicense?: {
     number: string;
@@ -120,19 +111,11 @@ export type CitizenUser = {
     cardNumber: string;
   };
 
-  /* =======================================================
-     DIGITAL LICENSE
-  ======================================================= */
-
   digitalLicense?: {
     enabled: boolean;
     qrToken: string;
     lastGenerated: string;
   };
-
-  /* =======================================================
-     COLLECTION
-  ======================================================= */
 
   collection?: {
     productionStatus: string;
@@ -140,24 +123,13 @@ export type CitizenUser = {
     location: string;
   };
 
-  /* =======================================================
-     OWNERSHIP
-  ======================================================= */
-
   ownership?: {
     verified: boolean;
   };
 
-  /* =======================================================
-     PROFILE
-  ======================================================= */
-
   profilePhoto?: string;
-
   signaturePhoto?: string;
-
   gender?: string;
-
   birthDate?: string;
 
   address?: {
@@ -168,10 +140,6 @@ export type CitizenUser = {
     postalCode: string;
   };
 
-  /* =======================================================
-     LICENSE HISTORY
-  ======================================================= */
-
   licenceHistory?: {
     type: string;
     date: string;
@@ -179,28 +147,9 @@ export type CitizenUser = {
     licenseStatus?: boolean;
   }[];
 
-  /* =======================================================
-     VEHICLES
-  ======================================================= */
-
   vehicles?: CitizenVehicle[];
-
-  /* =======================================================
-     FINES
-  ======================================================= */
-
   fines?: CitizenFine[];
-
-  /* =======================================================
-     NOTIFICATIONS
-  ======================================================= */
-
   notifications?: any[];
-
-  /* =======================================================
-     EMERGENCY CONTACTS
-  ======================================================= */
-
   emergencyContacts?: any[];
 
   emergencyContact?: {
@@ -209,28 +158,16 @@ export type CitizenUser = {
     relationship: string;
   };
 
-  /* =======================================================
-     PREFERENCES
-  ======================================================= */
-
   preferences?: {
     biometricLogin: boolean;
     darkMode: boolean;
     notifications: boolean;
   };
 
-  /* =======================================================
-     MEDICAL
-  ======================================================= */
-
   medical?: {
     conditions: string;
     organDonor: boolean;
   };
-
-  /* =======================================================
-     RENEWAL
-  ======================================================= */
 
   renewal?: {
     status: string;
@@ -245,18 +182,15 @@ export type CitizenUser = {
 
 type AuthContextType = {
   user: CitizenUser | null;
-
   loading: boolean;
-
   isLoggedIn: boolean;
-
   device: any;
 
   setIsLoggedIn: (value: boolean) => void;
-
   setUser: (user: CitizenUser | null) => void;
 
-  reloadUser: () => Promise<void>;
+  reloadUser: () => Promise<boolean>;
+  logout: () => Promise<void>;
 };
 
 /* =========================================================
@@ -265,18 +199,14 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-
   loading: true,
-
   isLoggedIn: false,
-
   device: null,
 
   setIsLoggedIn: () => {},
-
   setUser: () => {},
-
-  reloadUser: async () => {},
+  reloadUser: async () => false,
+  logout: async () => {},
 });
 
 /* =========================================================
@@ -288,158 +218,153 @@ export const AuthProvider = ({
 }: {
   children: React.ReactNode;
 }) => {
-  const [user, setUser] =
-    useState<CitizenUser | null>(null);
+  const [user, setUser] = useState<CitizenUser | null>(null);
 
-  const [device, setDevice] =
-    useState<any>(null);
+  const [device, setDevice] = useState<any>(null);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const [isLoggedIn, setIsLoggedIn] =
-    useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   /* =======================================================
-     LOAD USER
+     LOAD CITIZEN SESSION
   ======================================================= */
 
-  const loadSession = async () => {
+  const loadSession = async (
+    initialLoad = false
+  ): Promise<boolean> => {
     try {
-      setLoading(true);
+      if (initialLoad) {
+        setLoading(true);
+      }
 
-      /* -----------------------------------------------
-         GET DEVICE
-      ------------------------------------------------ */
-
+      // Get current device.
       const dev = await getDeviceInfo();
 
       setDevice(dev);
 
-      /* -----------------------------------------------
-         GET SAVED USER ID
-      ------------------------------------------------ */
+      if (!dev?.deviceId) {
+        setUser(null);
+        setIsLoggedIn(false);
+        return false;
+      }
 
+      // Get saved citizen ID.
       const savedUserId =
         await AsyncStorage.getItem("userId");
 
       if (!savedUserId) {
         setUser(null);
         setIsLoggedIn(false);
-        return;
+        return false;
       }
 
-      /* -----------------------------------------------
-         GET CITIZEN DOCUMENT
-      ------------------------------------------------ */
-
-      const ref = doc(
+      // Fetch citizen document.
+      const citizenRef = doc(
         db,
         "citizens",
         savedUserId
       );
 
-      const snap = await getDoc(ref);
+      const snap = await getDoc(citizenRef);
 
       if (!snap.exists()) {
         setUser(null);
         setIsLoggedIn(false);
-        return;
+        return false;
       }
 
-      /* -----------------------------------------------
-         FIRESTORE DATA
-      ------------------------------------------------ */
+      const data = snap.data() as CitizenUser;
 
-      const data =
-        snap.data() as CitizenUser;
+      // Check all supported device-registration formats.
+      const currentDeviceId = dev.deviceId;
 
-      /* -----------------------------------------------
-         DEVICE GUARD
-      ------------------------------------------------ */
+      const deviceAuthorised =
+        data.registeredDeviceId === currentDeviceId ||
+        data.registeredDevice?.deviceId === currentDeviceId ||
+        !!data.devices?.[currentDeviceId];
 
-      if (
-        !data.devices ||
-        !dev?.deviceId ||
-        !data.devices?.[dev.deviceId]
-      ) {
+      if (!deviceAuthorised) {
         console.log(
-          "Device not authorised"
+          "AuthContext: Device not authorised."
         );
 
         setUser(null);
         setIsLoggedIn(false);
 
-        return;
+        return false;
       }
 
-      /* -----------------------------------------------
-         NORMALISE FINES
-      ------------------------------------------------ */
-
+      // Normalise fines.
       const fines = Array.isArray(data.fines)
         ? data.fines
         : [];
 
-      /* -----------------------------------------------
-         SET USER
-      ------------------------------------------------ */
-
+      // Save citizen profile in context.
       setUser({
         ...data,
-         id: snap.id,
+        id: snap.id,
         fines,
       });
 
       setIsLoggedIn(true);
 
-    } catch (error) {
+      return true;
 
+    } catch (error) {
       console.error(
         "AuthContext load error:",
         error
       );
 
       setUser(null);
-
       setIsLoggedIn(false);
 
+      // Keep the saved ID.
+      // A temporary network failure must not erase it.
+
+      return false;
+
     } finally {
-
-      setLoading(false);
-
+      if (initialLoad) {
+        setLoading(false);
+      }
     }
   };
-
+// INITIAL SESSION CHECK
+useEffect(() => {
+  loadSession(true);
+}, []);
   /* =======================================================
-     INITIAL SESSION
+     INITIAL SESSION CHECK
   ======================================================= */
 
-  useEffect(() => {
-    loadSession();
-  }, []);
+   const logout = async (): Promise<void> => {
+    // Clear the saved login session
+    await AsyncStorage.removeItem("userId");
 
+    // Clear the active citizen session
+    setUser(null);
+    setIsLoggedIn(false);
+
+    console.log("AuthContext: User successfully logged out.");
+  };
   /* =======================================================
      PROVIDER
   ======================================================= */
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-
-        loading,
-
-        isLoggedIn,
-
-        device,
-
-        setIsLoggedIn,
-
-        setUser,
-
-        reloadUser: loadSession,
-      }}
+     value={{
+  user,
+  loading,
+  isLoggedIn,
+  device,
+  setIsLoggedIn,
+  setUser,
+  reloadUser: loadSession,
+  logout,
+}}
     >
       {children}
     </AuthContext.Provider>
@@ -447,7 +372,7 @@ export const AuthProvider = ({
 };
 
 /* =========================================================
-   HOOK
+   AUTH HOOK
 ========================================================= */
 
 export const useAuth = () =>

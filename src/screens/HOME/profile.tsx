@@ -20,7 +20,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import {
   addDoc,
   collection,
@@ -171,10 +171,8 @@ export default function ProfileScreen({ navigation }: any) {
 const {
   user,
   loading,
-  setUser,
-  setIsLoggedIn,
-  reloadUser,
-} = useAuth() as any;
+  logout,
+} = useAuth();
 
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -191,18 +189,24 @@ const {
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [requestsLoadError, setRequestsLoadError] = useState("");
 
-  const fullName = String(
-    user?.fullName ?? user?.name ?? "Citizen"
-  ).trim();
+ const fullName = String(
+  user?.fullName ?? "Citizen"
+).trim();
 
-  const phone = user?.phone ? String(user.phone) : "Not added";
-  const email = user?.email ? String(user.email) : "Not added";
-  const idNumber = user?.idNumber ? String(user.idNumber) : "";
+const phone = user?.phone
+  ? String(user.phone)
+  : "Not added";
 
-  // Use the existing citizen/user ID for linking requests to the profile.
-  const citizenKey = String(
-    user?.id ?? user?.userId ?? user?.uid ?? ""
-  ).trim();
+const email = user?.email
+  ? String(user.email)
+  : "Not added";
+
+const idNumber = user?.idNumber
+  ? String(user.idNumber)
+  : "";
+
+// The citizen document ID is the correct identifier.
+const citizenKey = String(user?.id ?? "").trim();
 
   const initials = useMemo(() => {
     const parts = fullName.split(/\s+/).filter(Boolean);
@@ -374,9 +378,9 @@ const {
       const requestRef = await addDoc(
         collection(db, "profileChangeRequests"),
         {
-          userId: citizenKey,
-          authUid: user?.uid ?? null,
-          citizenName: fullName,
+         userId: citizenKey,
+citizenName: fullName,
+          
 
           currentValues: {
             email: currentEmail,
@@ -412,26 +416,27 @@ const {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      setLoggingOut(true);
+const handleLogout = async () => {
+  try {
+    setLoggingOut(true);
 
-      await AsyncStorage.removeItem("userId");
+    // Call the central logout function in AuthContext
+    await logout();
 
-      setShowLogoutModal(false);
-      setUser(null);
-      setIsLoggedIn(false);
-    } catch (error) {
-      console.error("Profile logout failed:", error);
+    // Close the confirmation modal
+    setShowLogoutModal(false);
 
-      Alert.alert(
-        "Could not log out",
-        "Please try again."
-      );
-    } finally {
-      setLoggingOut(false);
-    }
-  };
+  } catch (error) {
+    console.error("Profile logout failed:", error);
+
+    Alert.alert(
+      "Could not log out",
+      "Please try again."
+    );
+  } finally {
+    setLoggingOut(false);
+  }
+};
 
   const renderMenuItem = (item: MenuItem, index: number) => (
     <TouchableOpacity

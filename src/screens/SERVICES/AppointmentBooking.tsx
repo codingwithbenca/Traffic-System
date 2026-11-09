@@ -235,170 +235,169 @@ export default function AppointmentBooking() {
      CONFIRM APPOINTMENT
   ======================================================= */
 
-  const handleConfirm = async () => {
-    console.log("========================================");
-    console.log("📅 APPOINTMENT CONFIRM STARTED");
-    console.log("========================================");
+  
+const handleConfirm = async () => {
+  console.log("========================================");
+  console.log("📅 APPOINTMENT CONFIRM STARTED");
+  console.log("========================================");
 
+  console.log(
+    "[AppointmentBooking] Current booking:",
+    booking
+  );
+
+  /* -------------------------------------------------------
+     VALIDATION
+  ------------------------------------------------------- */
+
+  if (!canContinue()) {
     console.log(
-      "[AppointmentBooking] Current booking:",
-      booking
+      "[AppointmentBooking] ❌ Validation failed"
     );
 
-    /* -------------------------------------------------------
-       VALIDATION
-    ------------------------------------------------------- */
+    console.log("[AppointmentBooking] Service:", booking.service);
+    console.log("[AppointmentBooking] Branch:", booking.branch);
+    console.log("[AppointmentBooking] Date:", booking.date);
+    console.log("[AppointmentBooking] Time:", booking.time);
 
-    if (!canContinue()) {
-      console.log(
-        "[AppointmentBooking] ❌ Validation failed"
-      );
+    return;
+  }
 
-      console.log(
-        "[AppointmentBooking] Service:",
-        booking.service
-      );
+  console.log(
+    "[AppointmentBooking] ✅ Booking validation passed"
+  );
 
-      console.log(
-        "[AppointmentBooking] Branch:",
-        booking.branch
-      );
+  try {
+    /* -----------------------------------------------------
+       GET USER
+    ----------------------------------------------------- */
 
-      console.log(
-        "[AppointmentBooking] Date:",
-        booking.date
-      );
+    console.log(
+      "[AppointmentBooking] Getting userId from AsyncStorage..."
+    );
 
-      console.log(
-        "[AppointmentBooking] Time:",
-        booking.time
-      );
+    const userId = await AsyncStorage.getItem("userId");
 
-      return;
+    console.log("[AppointmentBooking] userId:", userId);
+
+    if (!userId) {
+      throw new Error("No logged-in citizen was found.");
     }
 
     console.log(
-      "[AppointmentBooking] ✅ Booking validation passed"
+      "[AppointmentBooking] ✅ Citizen identified:",
+      userId
     );
+
+    /* -----------------------------------------------------
+       CREATE APPOINTMENT
+    ----------------------------------------------------- */
+
+    console.log(
+      "[AppointmentBooking] Sending appointment to Firestore..."
+    );
+
+    const result = await createAppointment({
+      userId,
+      booking,
+    });
+
+    console.log(
+      "[AppointmentBooking] ✅ Firestore appointment created"
+    );
+
+    console.log(
+      "[AppointmentBooking] Appointment ID:",
+      result.appointmentId
+    );
+
+    console.log(
+      "[AppointmentBooking] Appointment Number:",
+      result.appointmentNumber
+    );
+
+    /* -----------------------------------------------------
+       SAVE ONE-TIME NOTIFICATION MARKER
+    ----------------------------------------------------- */
 
     try {
-      /* -----------------------------------------------------
-         GET USER
-      ----------------------------------------------------- */
-
-      console.log(
-        "[AppointmentBooking] Getting userId from AsyncStorage..."
-      );
-
-      const userId =
-        await AsyncStorage.getItem("userId");
-
-      console.log(
-        "[AppointmentBooking] userId:",
-        userId
-      );
-
-      if (!userId) {
-        console.error(
-          "[AppointmentBooking] ❌ No userId found"
-        );
-
-        throw new Error(
-          "No logged-in citizen was found."
-        );
-      }
-
-      console.log(
-        "[AppointmentBooking] ✅ Citizen identified:",
-        userId
-      );
-
-      /* -----------------------------------------------------
-         CREATE APPOINTMENT
-      ----------------------------------------------------- */
-
-      console.log(
-        "[AppointmentBooking] Sending appointment to Firestore..."
-      );
-
-      const result = await createAppointment({
-        userId,
-        booking,
-      });
-
-      console.log(
-        "[AppointmentBooking] ✅ Firestore appointment created"
+      await AsyncStorage.setItem(
+        "pendingAppointmentToast",
+        JSON.stringify({
+          appointmentId: result.appointmentId,
+          appointmentNumber: result.appointmentNumber,
+          createdAt: Date.now(),
+        })
       );
 
       console.log(
-        "[AppointmentBooking] Appointment ID:",
-        result.appointmentId
+        "[AppointmentBooking] ✅ Notification marker saved"
       );
-
-      console.log(
-        "[AppointmentBooking] Appointment Number:",
-        result.appointmentNumber
-      );
-
-      /* -----------------------------------------------------
-         SAVE APPOINTMENT ID
-      ----------------------------------------------------- */
-
-      setBooking((previous) => ({
-        ...previous,
-        appointmentId: result.appointmentId,
-      }));
-
-      console.log(
-        "[AppointmentBooking] Booking state updated"
-      );
-
-      /* -----------------------------------------------------
-         GO TO CONFIRMATION
-      ----------------------------------------------------- */
-
-      setCurrentStepIndex(
-        STEPS.indexOf("confirmation")
-      );
-
-      console.log(
-        "[AppointmentBooking] ✅ Navigating to confirmation"
-      );
-
-      console.log("========================================");
-      console.log("📅 APPOINTMENT CONFIRM SUCCESS");
-      console.log("========================================");
-    } catch (error) {
-      console.error("========================================");
-      console.error(
-        "❌ APPOINTMENT CONFIRM FAILED"
-      );
-      console.error("========================================");
-
-      console.error(
-        "[AppointmentBooking] Error:",
-        error
-      );
-
-      if (error instanceof Error) {
-        console.error(
-          "[AppointmentBooking] Error message:",
-          error.message
-        );
-
-        console.error(
-          "[AppointmentBooking] Error stack:",
-          error.stack
-        );
-      }
-
-      console.error("========================================");
-
-      alert(
-        "We could not confirm your appointment. Please try again."
+    } catch (storageError) {
+      console.warn(
+        "[AppointmentBooking] Could not save notification marker:",
+        storageError
       );
     }
-  };
+
+    /* -----------------------------------------------------
+       SAVE APPOINTMENT ID
+    ----------------------------------------------------- */
+
+    setBooking((previous) => ({
+      ...previous,
+      appointmentId: result.appointmentId,
+    }));
+
+    console.log(
+      "[AppointmentBooking] Booking state updated"
+    );
+
+    /* -----------------------------------------------------
+       GO TO CONFIRMATION
+    ----------------------------------------------------- */
+
+    setCurrentStepIndex(
+      STEPS.indexOf("confirmation")
+    );
+
+    console.log(
+      "[AppointmentBooking] ✅ Navigating to confirmation"
+    );
+
+    console.log("========================================");
+    console.log("📅 APPOINTMENT CONFIRM SUCCESS");
+    console.log("========================================");
+
+  } catch (error) {
+    console.error("========================================");
+    console.error("❌ APPOINTMENT CONFIRM FAILED");
+    console.error("========================================");
+
+    console.error(
+      "[AppointmentBooking] Error:",
+      error
+    );
+
+    if (error instanceof Error) {
+      console.error(
+        "[AppointmentBooking] Error message:",
+        error.message
+      );
+
+      console.error(
+        "[AppointmentBooking] Error stack:",
+        error.stack
+      );
+    }
+
+    console.error("========================================");
+
+    alert(
+      "We could not confirm your appointment. Please try again."
+    );
+  }
+};
 
   /* =======================================================
      DONE

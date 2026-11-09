@@ -44,6 +44,10 @@ const COLORS = {
   softRed: "#FEF3F2",
 };
 
+// Maximum size allowed for each uploaded document.
+const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
 type UploadedFile = {
   name: string;
   uri: string;
@@ -401,6 +405,17 @@ export default function VehicleRegistrationScreen() {
 
       const asset = result.assets?.[0];
       if (!asset) return;
+
+      // Reject files larger than the allowed maximum.
+      if (asset.size && asset.size > MAX_FILE_SIZE_BYTES) {
+        const sizeInMb = (asset.size / (1024 * 1024)).toFixed(1);
+
+        Alert.alert(
+          "File Too Large",
+          `"${asset.name}" is ${sizeInMb} MB. The maximum allowed size is ${MAX_FILE_SIZE_MB} MB. Please choose a smaller file.`
+        );
+        return;
+      }
 
       setDocuments((previous) => ({
         ...previous,
@@ -840,7 +855,9 @@ export default function VehicleRegistrationScreen() {
             />
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.uploadTitle}>Select document</Text>
-              <Text style={styles.uploadHint}>PDF, JPG or PNG</Text>
+              <Text style={styles.uploadHint}>
+                PDF, JPG or PNG {" • "} Max {MAX_FILE_SIZE_MB} MB
+              </Text>
             </View>
             <Ionicons
               name="chevron-forward"
@@ -1460,6 +1477,11 @@ export default function VehicleRegistrationScreen() {
                 <Text style={styles.documentNoticeText}>
                   Documents must be clear, complete and readable. Only upload
                   documents belonging to this application.
+                  {"\n"}
+                  <Text style={styles.documentNoticeStrong}>
+                    Accepted formats: PDF, JPG, PNG. Maximum{" "}
+                    {MAX_FILE_SIZE_MB} MB per file.
+                  </Text>
                 </Text>
               </View>
 
@@ -1865,6 +1887,10 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 11,
     lineHeight: 17,
+  },
+  documentNoticeStrong: {
+    fontWeight: "700",
+    color: COLORS.primaryDark,
   },
   documentGroup: {
     marginBottom: 19,

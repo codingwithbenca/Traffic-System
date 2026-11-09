@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   SafeAreaView,
@@ -12,37 +13,37 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Modal,
 } from "react-native";
+
 import { Ionicons } from "@expo/vector-icons";
 
-import FaceVerificationScanner from "../components/FaceVerificationScanner";
 import { getDeviceInfo } from "../utils/device";
-import { verifyUser } from "../services/authService";
+import {
+  verifyUser,
+  activateUser,
+} from "../services/authService";
+
+import Toast from "../components/Toast";
 
 const COLORS = {
   primary: "#0B4F8A",
   primaryDark: "#083B68",
-
   background: "#F3F5F7",
   card: "#FFFFFF",
-
   text: "#17212B",
   textLight: "#66737F",
-
   border: "#D9E0E6",
-
   success: "#18794E",
-  warning: "#A16207",
   danger: "#B42318",
-
   softBlue: "#EAF3FA",
   softGreen: "#ECFDF3",
-  softYellow: "#FFF8E6",
   softRed: "#FEF3F2",
 };
 
-type MessageType = "success" | "error" | "info" | "";
+type ToastType = "success" | "error" | "info";
+
+const OTP_VALIDITY = 5 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
 
 export default function VerifyAccountScreen({
   navigation,
@@ -54,36 +55,40 @@ export default function VerifyAccountScreen({
   const [idNumber, setIdNumber] = useState("");
   const [phone, setPhone] = useState("");
 
+  const [otp, setOtp] = useState("");
+  const [generatedOtp, setGeneratedOtp] = useState("");
+  const [otpExpiresAt, setOtpExpiresAt] = useState(0);
+  const [otpAttempts, setOtpAttempts] = useState(0);
+
+  const [detailsVerified, setDetailsVerified] = useState(false);
+  const [accountActivated, setAccountActivated] = useState(false);
+
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
 
-  const [message, setMessage] = useState("");
-  const [messageType, setMessageType] =
-    useState<MessageType>("");
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<ToastType>("info");
 
-  const [idVerified, setIdVerified] = useState(false);
-  const [phoneVerified, setPhoneVerified] =
-    useState(false);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-  const [faceVerified, setFaceVerified] =
-    useState(false);
-
-  const [faceModalVisible, setFaceModalVisible] =
-    useState(false);
-
-  const shakeAnim = useRef(
-    new Animated.Value(0)
-  ).current;
+  const shakeAnim = useRef(new Animated.Value(0)).current;
 
   // =========================================================
-  // MESSAGE
+  // TOAST
   // =========================================================
 
-  const showMessage = (
-    text: string,
-    type: "success" | "error" | "info"
+  const showToast = (
+    message: string,
+    type: ToastType = "info"
   ) => {
-    setMessage(text);
-    setMessageType(type);
+    setToastMessage(message);
+    setToastType(type);
+    setToastVisible(true);
+  };
+
+  const hideToast = () => {
+    setToastVisible(false);
   };
 
   // =========================================================
@@ -99,19 +104,16 @@ export default function VerifyAccountScreen({
         duration: 60,
         useNativeDriver: true,
       }),
-
       Animated.timing(shakeAnim, {
         toValue: -1,
         duration: 60,
         useNativeDriver: true,
       }),
-
       Animated.timing(shakeAnim, {
         toValue: 1,
         duration: 60,
         useNativeDriver: true,
       }),
-
       Animated.timing(shakeAnim, {
         toValue: 0,
         duration: 60,
@@ -119,12 +121,6 @@ export default function VerifyAccountScreen({
       }),
     ]).start();
   };
-
-  useEffect(() => {
-    if (messageType === "error") {
-      shake();
-    }
-  }, [message, messageType]);
 
   const shakeStyle = {
     transform: [
@@ -138,231 +134,297 @@ export default function VerifyAccountScreen({
   };
 
   // =========================================================
-  // VERIFY ID + PHONE
+  // OTP COUNTDOWN
+  // =========================================================
+
+  useEffect(() => {
+    if (!generatedOtp || !otpExpiresAt) {
+      setRemainingSeconds(0);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((otpExpiresAt - Date.now()) / 1000)
+      );
+
+      setRemainingSeconds(remaining);
+    };
+
+    updateCountdown();
+
+    const interval = setInterval(updateCountdown, 1000);
+
+    return () => clearInterval(interval);
+  }, [generatedOtp, otpExpiresAt]);
+
+  const formatTime = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+
+    return `${String(minutes).padStart(2, "0")}:${String(
+      remaining
+    ).padStart(2, "0")}`;
+  };
+
+  // =========================================================
+  // GENERATE IN-APP OTP
+  // =========================================================
+
+  const generateOtp = () => {
+    // Demo implementation: six-digit activation code.
+    const newOtp = String(
+      Math.floor(100000 + Math.random() * 900000)
+    );
+
+    setGeneratedOtp(newOtp);
+    setOtp("");
+    setOtpAttempts(0);
+    setOtpExpiresAt(Date.now() + OTP_VALIDITY);
+
+    console.log("=================================");
+    console.log("IN-APP ACTIVATION CODE GENERATED");
+    console.log("OTP:", newOtp);
+    console.log("Expires in: 5 minutes");
+    console.log("=================================");
+
+    showToast(
+      "Your activation code has been generated.",
+      "success"
+    );
+  };
+
+  // =========================================================
+  // VERIFY ID + REGISTERED PHONE
   // =========================================================
 
   const handleVerify = async () => {
     const cleanId = idNumber.trim();
     const cleanPhone = phone.trim();
 
-    // -----------------------------------------
-    // BASIC VALIDATION
-    // -----------------------------------------
-
     if (!cleanId || !cleanPhone) {
-      showMessage(
-        "Please enter your ID number and phone number.",
+      showToast(
+        "Please enter your ID number and registered phone number.",
         "error"
       );
+      shake();
       return;
     }
 
-    // South African ID = exactly 13 digits
     if (!/^\d{13}$/.test(cleanId)) {
-      showMessage(
+      showToast(
         "Your South African ID number must contain exactly 13 digits.",
         "error"
       );
+      shake();
       return;
     }
 
     if (cleanPhone.length < 9) {
-      showMessage(
+      showToast(
         "Please enter a valid registered phone number.",
         "error"
       );
+      shake();
       return;
     }
 
-    // -----------------------------------------
-    // START VERIFICATION
-    // -----------------------------------------
-
     setLoading(true);
-    setMessage("");
-    setMessageType("");
+    setLoadingMessage("Checking your citizen record...");
 
     try {
       console.log("=================================");
-      console.log("🔐 STARTING ACCOUNT VERIFICATION");
+      console.log("STARTING CITIZEN VERIFICATION");
       console.log("=================================");
-
-      const device = await getDeviceInfo();
-
-      console.log(
-        "📱 DEVICE INFORMATION RECEIVED"
-      );
 
       const result = await verifyUser(
         cleanId,
-        cleanPhone,
-        device
+        cleanPhone
       );
 
-      console.log(
-        "🔎 VERIFY USER RESULT:",
-        result
-      );
+      console.log("VERIFY USER RESULT:", result);
 
-      // -----------------------------------------
-      // SUCCESS
-      // -----------------------------------------
+      if (!result.success) {
+        setDetailsVerified(false);
 
-      if (result.success) {
-        setIdVerified(true);
-        setPhoneVerified(true);
-
-        showMessage(
-          result.message ||
-            "Your ID number and registered phone number have been verified.",
-          "success"
-        );
-
-        console.log(
-          "✅ ID + PHONE VERIFICATION SUCCESSFUL"
-        );
-      }
-
-      // -----------------------------------------
-      // FAILED
-      // -----------------------------------------
-
-      else {
-        setIdVerified(false);
-        setPhoneVerified(false);
-        setFaceVerified(false);
-
-        showMessage(
-          result.message ||
-            "We could not verify your account.",
+        showToast(
+          result.message || "We could not verify your details.",
           "error"
         );
 
-        console.log(
-          "❌ ID + PHONE VERIFICATION FAILED"
-        );
+        return;
       }
+
+      setDetailsVerified(true);
+
+      // Only generate an OTP after citizen details match.
+      generateOtp();
+
+      console.log("CITIZEN DETAILS VERIFIED");
     } catch (error: any) {
-      console.log(
-        "❌ Verification error:",
-        error
-      );
+      console.log("Citizen verification error:", error);
 
-      setIdVerified(false);
-      setPhoneVerified(false);
-      setFaceVerified(false);
-
-      showMessage(
-        error?.message ||
-          "Something went wrong while verifying your account. Please try again.",
+      showToast(
+        error?.message || "Unable to verify your details. Please try again.",
         "error"
       );
     } finally {
       setLoading(false);
+      setLoadingMessage("");
     }
   };
 
   // =========================================================
-  // FACE VERIFICATION
+  // CONFIRM OTP + ACTIVATE ACCOUNT
   // =========================================================
 
-  const handleFaceVerification = () => {
-    if (!idVerified || !phoneVerified) {
-      showMessage(
-        "Please verify your ID and registered phone number first.",
+  const handleConfirmOtp = async () => {
+    if (!detailsVerified || !generatedOtp) {
+      showToast(
+        "Please verify your citizen details first.",
         "error"
       );
+      return;
+    }
+
+    if (remainingSeconds <= 0 || Date.now() >= otpExpiresAt) {
+      setGeneratedOtp("");
+      setOtp("");
+      showToast(
+        "Your activation code has expired. Generate a new code.",
+        "error"
+      );
+      return;
+    }
+
+    if (!/^\d{6}$/.test(otp.trim())) {
+      showToast(
+        "Please enter the complete six-digit activation code.",
+        "error"
+      );
+      shake();
+      return;
+    }
+
+    if (otpAttempts >= MAX_OTP_ATTEMPTS) {
+      setGeneratedOtp("");
+      setOtp("");
+      showToast(
+        "Too many incorrect attempts. Generate a new activation code.",
+        "error"
+      );
+      return;
+    }
+
+    if (otp.trim() !== generatedOtp) {
+      const nextAttempts = otpAttempts + 1;
+      setOtpAttempts(nextAttempts);
+      setOtp("");
+
+      shake();
+
+      if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+        setGeneratedOtp("");
+        setOtpExpiresAt(0);
+
+        showToast(
+          "Maximum attempts reached. Generate a new activation code.",
+          "error"
+        );
+      } else {
+        showToast(
+          `Incorrect code. ${MAX_OTP_ATTEMPTS - nextAttempts} attempts remaining.`,
+          "error"
+        );
+      }
 
       return;
     }
 
-    setMessage("");
-    setMessageType("");
+    setLoading(true);
+    setLoadingMessage("Registering your device...");
 
-    setFaceModalVisible(true);
+    try {
+      console.log("=================================");
+      console.log("OTP CONFIRMED");
+      console.log("STARTING DEVICE REGISTRATION");
+      console.log("=================================");
+
+      // Get the installation/device information only now.
+      const device = await getDeviceInfo();
+
+      console.log("DEVICE INFORMATION:", device);
+
+      const result = await activateUser(
+        idNumber.trim(),
+        device
+      );
+
+      console.log("ACCOUNT ACTIVATION RESULT:", result);
+
+      if (!result.success) {
+        showToast(
+          result.message || "Account activation failed.",
+          "error"
+        );
+        return;
+      }
+
+      setAccountActivated(true);
+      setGeneratedOtp("");
+      setOtp("");
+      setOtpExpiresAt(0);
+
+      showToast(
+        "Your account is now active. You can log in.",
+        "success"
+      );
+
+      console.log("ACCOUNT ACTIVATED SUCCESSFULLY");
+    } catch (error: any) {
+      console.log("Activation error:", error);
+
+      showToast(
+        error?.message || "Unable to activate your account.",
+        "error"
+      );
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
+    }
   };
 
   // =========================================================
-  // FACE VERIFICATION SUCCESS
+  // RESEND OTP
   // =========================================================
 
-  const handleFaceSuccess = (
-    imageUri?: string
-  ) => {
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "✅ FACE VERIFICATION SUCCESSFUL"
-    );
-
-    if (imageUri) {
-      console.log(
-        "📸 FACE IMAGE:",
-        imageUri
+  const handleResendOtp = () => {
+    if (!detailsVerified) {
+      showToast(
+        "Verify your citizen details first.",
+        "error"
       );
+      return;
     }
 
-    console.log(
-      "================================="
-    );
+    if (accountActivated) return;
 
-    setFaceModalVisible(false);
-    setFaceVerified(true);
-
-    showMessage(
-      "Your face has been successfully verified.",
-      "success"
-    );
+    generateOtp();
   };
 
   // =========================================================
-  // FACE VERIFICATION CANCEL
-  // =========================================================
-
-  const handleFaceCancel = () => {
-    console.log(
-      "ℹ️ FACE VERIFICATION CANCELLED"
-    );
-
-    setFaceModalVisible(false);
-  };
-
-  // =========================================================
-  // ALL VERIFIED
-  // =========================================================
-
-  const allVerified =
-    idVerified &&
-    phoneVerified &&
-    faceVerified;
-
-  // =========================================================
-  // COMPLETE VERIFICATION
+  // CONTINUE TO LOGIN
   // =========================================================
 
   const handleContinue = () => {
-    if (!allVerified) {
-      showMessage(
-        "Please complete all three verification steps.",
+    if (!accountActivated) {
+      showToast(
+        "Please complete account activation first.",
         "error"
       );
-
       return;
     }
-
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "✅ ACCOUNT FULLY VERIFIED"
-    );
-
-    console.log(
-      "================================="
-    );
 
     navigation.replace("Login");
   };
@@ -379,29 +441,23 @@ export default function VerifyAccountScreen({
 
     const url =
       `https://wa.me/${supportNumber}` +
-      `?text=${encodeURIComponent(
-        supportMessage
-      )}`;
+      `?text=${encodeURIComponent(supportMessage)}`;
 
     try {
-      const supported =
-        await Linking.canOpenURL(url);
+      const supported = await Linking.canOpenURL(url);
 
       if (supported) {
         await Linking.openURL(url);
       } else {
-        showMessage(
+        showToast(
           "WhatsApp is not available on this device.",
           "error"
         );
       }
     } catch (error) {
-      console.log(
-        "WhatsApp error:",
-        error
-      );
+      console.log("WhatsApp error:", error);
 
-      showMessage(
+      showToast(
         "Unable to open WhatsApp.",
         "error"
       );
@@ -409,132 +465,62 @@ export default function VerifyAccountScreen({
   };
 
   // =========================================================
-  // MESSAGE COLOR
-  // =========================================================
-
-  const getMessageColor = () => {
-    if (messageType === "success") {
-      return COLORS.success;
-    }
-
-    if (messageType === "error") {
-      return COLORS.danger;
-    }
-
-    return COLORS.primary;
-  };
-
-  // =========================================================
-  // STEP COMPONENT
+  // PROGRESS STEP
   // =========================================================
 
   const renderStep = (
     number: number,
     title: string,
     description: string,
-    verified: boolean,
-    required: boolean,
-    disabled: boolean = false
-  ) => {
-    return (
+    completed: boolean,
+    disabled = false
+  ) => (
+    <View
+      style={[
+        styles.stepRow,
+        disabled && styles.stepDisabled,
+      ]}
+    >
       <View
         style={[
-          styles.stepRow,
-          disabled && styles.stepDisabled,
+          styles.stepCircle,
+          completed && styles.stepCircleVerified,
         ]}
       >
-        {/* STEP NUMBER */}
-        <View
-          style={[
-            styles.stepCircle,
-            verified &&
-              styles.stepCircleVerified,
-            disabled &&
-              styles.stepCircleDisabled,
-          ]}
-        >
-          {verified ? (
-            <Ionicons
-              name="checkmark"
-              size={17}
-              color="#FFFFFF"
-            />
-          ) : (
-            <Text
-              style={[
-                styles.stepNumber,
-                disabled &&
-                  styles.stepNumberDisabled,
-              ]}
-            >
-              {number}
-            </Text>
+        {completed ? (
+          <Ionicons
+            name="checkmark"
+            size={17}
+            color="#FFFFFF"
+          />
+        ) : (
+          <Text style={styles.stepNumber}>
+            {number}
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.stepInformation}>
+        <View style={styles.stepTitleRow}>
+          <Text style={styles.stepTitle}>
+            {title}
+          </Text>
+
+          {completed && (
+            <View style={styles.verifiedBadge}>
+              <Text style={styles.verifiedBadgeText}>
+                COMPLETED
+              </Text>
+            </View>
           )}
         </View>
 
-        {/* STEP INFORMATION */}
-        <View style={styles.stepInformation}>
-          <View style={styles.stepTitleRow}>
-            <Text
-              style={[
-                styles.stepTitle,
-                disabled &&
-                  styles.stepTitleDisabled,
-              ]}
-            >
-              {title}
-            </Text>
-
-            {/* VERIFIED */}
-            {verified && (
-              <View
-                style={
-                  styles.verifiedBadge
-                }
-              >
-                <Text
-                  style={
-                    styles.verifiedBadgeText
-                  }
-                >
-                  VERIFIED
-                </Text>
-              </View>
-            )}
-
-            {/* REQUIRED */}
-            {!verified &&
-              required &&
-              !disabled && (
-                <View
-                  style={
-                    styles.requiredBadge
-                  }
-                >
-                  <Text
-                    style={
-                      styles.requiredText
-                    }
-                  >
-                    REQUIRED
-                  </Text>
-                </View>
-              )}
-          </View>
-
-          <Text
-            style={[
-              styles.stepDescription,
-              disabled &&
-                styles.stepDescriptionDisabled,
-            ]}
-          >
-            {description}
-          </Text>
-        </View>
+        <Text style={styles.stepDescription}>
+          {description}
+        </Text>
       </View>
-    );
-  };
+    </View>
+  );
 
   // =========================================================
   // SCREEN
@@ -542,29 +528,28 @@ export default function VerifyAccountScreen({
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* REUSABLE TOAST */}
+      <Toast
+        visible={toastVisible}
+        message={toastMessage}
+        type={toastType}
+        duration={3500}
+        onHide={hideToast}
+      />
+
       <KeyboardAvoidingView
         style={styles.keyboard}
-        behavior={
-          Platform.OS === "ios"
-            ? "padding"
-            : undefined
-        }
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={
-            styles.container
-          }
+          contentContainerStyle={styles.container}
         >
-          {/* =====================================================
-              HEADER
-          ===================================================== */}
+          {/* HEADER */}
 
           <View style={styles.header}>
-            <View
-              style={styles.logoContainer}
-            >
+            <View style={styles.logoContainer}>
               <Ionicons
                 name="shield-checkmark-outline"
                 size={31}
@@ -577,36 +562,26 @@ export default function VerifyAccountScreen({
             </Text>
 
             <Text style={styles.title}>
-              Verify Your Account
+              Activate Your Account
             </Text>
 
             <Text style={styles.subtitle}>
-              Complete three security checks
-              to link your government record
-              and activate your citizen
-              account.
+              Verify your citizen record, confirm your
+              activation code and register your device
+              to access TrafficConnect services.
             </Text>
           </View>
 
-          {/* =====================================================
-              VERIFICATION CARD
-          ===================================================== */}
+          {/* MAIN CARD */}
 
           <Animated.View
             style={[
               styles.verifyCard,
-              messageType === "error" &&
-                shakeStyle,
+              shakeStyle,
             ]}
           >
-            {/* CARD HEADER */}
-
             <View style={styles.cardHeader}>
-              <View
-                style={
-                  styles.cardHeaderIcon
-                }
-              >
+              <View style={styles.cardHeaderIcon}>
                 <Ionicons
                   name="shield-checkmark-outline"
                   size={21}
@@ -614,24 +589,14 @@ export default function VerifyAccountScreen({
                 />
               </View>
 
-              <View
-                style={
-                  styles.cardHeaderInformation
-                }
-              >
-                <Text
-                  style={styles.cardTitle}
-                >
-                  Citizen Verification
+              <View style={styles.cardHeaderInformation}>
+                <Text style={styles.cardTitle}>
+                  Citizen Account Activation
                 </Text>
 
-                <Text
-                  style={
-                    styles.cardDescription
-                  }
-                >
-                  Complete all three checks
-                  to verify your identity.
+                <Text style={styles.cardDescription}>
+                  Complete the steps below to activate
+                  your account.
                 </Text>
               </View>
             </View>
@@ -640,132 +605,78 @@ export default function VerifyAccountScreen({
 
             {/* PROGRESS */}
 
-            <View
-              style={
-                styles.progressHeader
-              }
-            >
-              <Text
-                style={
-                  styles.progressTitle
-                }
-              >
-                Verification Progress
-              </Text>
+            <Text style={styles.progressTitle}>
+              Activation Progress
+            </Text>
 
-              <Text
-                style={
-                  styles.progressSubtitle
-                }
-              >
-                {allVerified
-                  ? "All verification checks completed."
-                  : "Three checks are required to continue."}
-              </Text>
-            </View>
-
-            {/* STEP 1 */}
+            <Text style={styles.progressSubtitle}>
+              {accountActivated
+                ? "Your account is ready."
+                : "Complete all three steps to continue."}
+            </Text>
 
             {renderStep(
               1,
-              "South African ID",
-              idVerified
-                ? "Your 13-digit ID number has been verified."
-                : "Verify your 13-digit South African ID number.",
-              idVerified,
-              true
+              "Citizen Details",
+              detailsVerified
+                ? "Your ID and registered phone number match."
+                : "Confirm your South African ID and registered phone.",
+              detailsVerified
             )}
 
             <View style={styles.stepLine} />
-
-            {/* STEP 2 */}
 
             {renderStep(
               2,
-              "Registered Phone Number",
-              phoneVerified
-                ? "Your registered phone number has been verified."
-                : "Verify the phone number linked to your record.",
-              phoneVerified,
-              true
+              "In-App Activation Code",
+              generatedOtp
+                ? "Your six-digit activation code is ready."
+                : accountActivated
+                ? "Your activation code was confirmed."
+                : "Confirm the code generated for this activation.",
+              accountActivated
             )}
 
             <View style={styles.stepLine} />
 
-            {/* STEP 3 */}
-
             {renderStep(
               3,
-              "Face Verification",
-              faceVerified
-                ? "Your face has been successfully verified."
-                : idVerified &&
-                  phoneVerified
-                ? "Confirm your identity using your face."
-                : "Complete the ID and phone checks first.",
-              faceVerified,
-              true,
-              !idVerified ||
-                !phoneVerified
+              "Device Registration",
+              accountActivated
+                ? "This device is registered to your account."
+                : "Your device will be linked after OTP confirmation.",
+              accountActivated,
+              !detailsVerified
             )}
 
-            {/* =================================================
-                ID + PHONE FORM
-            ================================================= */}
+            <View style={styles.sectionDivider} />
 
-            {!idVerified && (
+            {/* STEP 1: CITIZEN DETAILS */}
+
+            {!detailsVerified && (
               <>
-                <View
-                  style={
-                    styles.sectionDivider
-                  }
-                />
+                <Text style={styles.sectionTitle}>
+                  Your Citizen Details
+                </Text>
 
-                {/* ID NUMBER */}
-
-                <View
-                  style={styles.inputGroup}
-                >
-                  <Text
-                    style={
-                      styles.inputLabel
-                    }
-                  >
-                    ID NUMBER
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>
+                    SOUTH AFRICAN ID NUMBER
                   </Text>
 
-                  <View
-                    style={
-                      styles.inputContainer
-                    }
-                  >
+                  <View style={styles.inputContainer}>
                     <Ionicons
                       name="card-outline"
                       size={20}
-                      color={
-                        COLORS.textLight
-                      }
+                      color={COLORS.textLight}
                     />
 
                     <TextInput
-                      placeholder="South African ID Number"
+                      placeholder="Enter your 13-digit ID number"
                       placeholderTextColor="#8A949D"
                       value={idNumber}
                       onChangeText={(value) => {
-                        const numbersOnly =
-                          value.replace(
-                            /\D/g,
-                            ""
-                          );
-
-                        setIdNumber(
-                          numbersOnly
-                        );
-
-                        if (message) {
-                          setMessage("");
-                          setMessageType("");
-                        }
+                        setIdNumber(value.replace(/\D/g, ""));
                       }}
                       keyboardType="number-pad"
                       maxLength={13}
@@ -775,137 +686,47 @@ export default function VerifyAccountScreen({
                     />
                   </View>
 
-                  <Text
-                    style={
-                      styles.inputHint
-                    }
-                  >
-                    Enter your 13-digit South
-                    African ID number.
+                  <Text style={styles.inputHint}>
+                    Enter your 13-digit South African ID number.
                   </Text>
                 </View>
 
-                {/* PHONE */}
-
-                <View
-                  style={styles.inputGroup}
-                >
-                  <Text
-                    style={
-                      styles.inputLabel
-                    }
-                  >
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>
                     REGISTERED PHONE NUMBER
                   </Text>
 
-                  <View
-                    style={
-                      styles.inputContainer
-                    }
-                  >
+                  <View style={styles.inputContainer}>
                     <Ionicons
                       name="call-outline"
                       size={20}
-                      color={
-                        COLORS.textLight
-                      }
+                      color={COLORS.textLight}
                     />
 
                     <TextInput
-                      placeholder="Registered Phone Number"
+                      placeholder="Enter your registered phone number"
                       placeholderTextColor="#8A949D"
                       value={phone}
                       onChangeText={(value) => {
-                        const cleaned =
-                          value.replace(
-                            /[^\d+]/g,
-                            ""
-                          );
-
-                        setPhone(cleaned);
-
-                        if (message) {
-                          setMessage("");
-                          setMessageType("");
-                        }
+                        setPhone(value.replace(/[^\d+]/g, ""));
                       }}
                       keyboardType="phone-pad"
                       style={styles.input}
                     />
                   </View>
 
-                  <Text
-                    style={
-                      styles.inputHint
-                    }
-                  >
-                    Use the phone number registered
-                    with your government record.
+                  <Text style={styles.inputHint}>
+                    Use the phone number linked to your citizen record.
                   </Text>
                 </View>
 
-                {/* MESSAGE */}
-
-                {message !== "" && (
-                  <View
-                    style={[
-                      styles.messageContainer,
-
-                      messageType ===
-                        "success" &&
-                        styles.successMessage,
-
-                      messageType ===
-                        "error" &&
-                        styles.errorMessage,
-
-                      messageType ===
-                        "info" &&
-                        styles.infoMessage,
-                    ]}
-                  >
-                    <Ionicons
-                      name={
-                        messageType ===
-                        "success"
-                          ? "checkmark-circle-outline"
-                          : messageType ===
-                            "error"
-                          ? "alert-circle-outline"
-                          : "information-circle-outline"
-                      }
-                      size={18}
-                      color={
-                        getMessageColor()
-                      }
-                    />
-
-                    <Text
-                      style={[
-                        styles.messageText,
-                        {
-                          color:
-                            getMessageColor(),
-                        },
-                      ]}
-                    >
-                      {message}
-                    </Text>
-                  </View>
-                )}
-
-                {/* VERIFY BUTTON */}
-
                 <TouchableOpacity
-                  onPress={
-                    handleVerify
-                  }
+                  onPress={handleVerify}
                   disabled={loading}
                   activeOpacity={0.8}
                   style={[
-                    styles.verifyButton,
-                    loading &&
-                      styles.verifyButtonDisabled,
+                    styles.primaryButton,
+                    loading && styles.buttonDisabled,
                   ]}
                 >
                   {loading ? (
@@ -914,25 +735,15 @@ export default function VerifyAccountScreen({
                         color="#FFFFFF"
                         size="small"
                       />
-
-                      <Text
-                        style={
-                          styles.verifyButtonText
-                        }
-                      >
-                        Verifying...
+                      <Text style={styles.primaryButtonText}>
+                        {loadingMessage || "Please wait..."}
                       </Text>
                     </>
                   ) : (
                     <>
-                      <Text
-                        style={
-                          styles.verifyButtonText
-                        }
-                      >
-                        Verify ID & Phone
+                      <Text style={styles.primaryButtonText}>
+                        Verify Citizen Details
                       </Text>
-
                       <Ionicons
                         name="arrow-forward"
                         size={18}
@@ -944,168 +755,205 @@ export default function VerifyAccountScreen({
               </>
             )}
 
-            {/* =================================================
-                FACE VERIFICATION
-            ================================================= */}
+            {/* STEP 2: OTP */}
 
-            {idVerified &&
-              phoneVerified &&
-              !faceVerified && (
-                <>
-                  <View
-                    style={
-                      styles.faceSection
-                    }
-                  >
-                    <View
-                      style={
-                        styles.faceSectionHeader
-                      }
-                    >
-                      <Ionicons
-                        name="scan-outline"
-                        size={18}
-                        color={
-                          COLORS.primary
-                        }
-                      />
-
-                      <Text
-                        style={
-                          styles.faceSectionTitle
-                        }
-                      >
-                        Final Security Check
-                      </Text>
-                    </View>
-
-                    <Text
-                      style={
-                        styles.faceSectionDescription
-                      }
-                    >
-                      Your ID and registered
-                      phone number are verified.
-                      Complete the final face
-                      verification to activate
-                      your account.
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    onPress={
-                      handleFaceVerification
-                    }
-                    activeOpacity={0.8}
-                    style={
-                      styles.faceButton
-                    }
-                  >
-                    <View
-                      style={
-                        styles.faceIcon
-                      }
-                    >
-                      <Ionicons
-                        name="scan-outline"
-                        size={22}
-                        color={
-                          COLORS.primary
-                        }
-                      />
-                    </View>
-
-                    <View
-                      style={
-                        styles.faceInformation
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.faceTitle
-                        }
-                      >
-                        Verify Your Face
-                      </Text>
-
-                      <Text
-                        style={
-                          styles.faceDescription
-                        }
-                      >
-                        Scan and confirm your
-                        face to complete
-                        verification.
-                      </Text>
-                    </View>
-
-                    <Ionicons
-                      name="chevron-forward"
-                      size={19}
-                      color={
-                        COLORS.textLight
-                      }
-                    />
-                  </TouchableOpacity>
-                </>
-              )}
-
-            {/* =================================================
-                ALL VERIFIED
-            ================================================= */}
-
-            {allVerified && (
+            {detailsVerified && !accountActivated && (
               <>
-                <View
-                  style={
-                    styles.accountVerified
-                  }
-                >
-                  <View
-                    style={
-                      styles.accountVerifiedIcon
-                    }
-                  >
+                <View style={styles.otpHeader}>
+                  <View style={styles.otpIcon}>
                     <Ionicons
-                      name="checkmark"
-                      size={26}
-                      color="#FFFFFF"
+                      name="keypad-outline"
+                      size={23}
+                      color={COLORS.primary}
                     />
                   </View>
 
-                  <Text
-                    style={
-                      styles.accountVerifiedTitle
-                    }
-                  >
-                    Account Verified
+                  <Text style={styles.sectionTitle}>
+                    Confirm Your Activation Code
+                  </Text>
+                </View>
+
+                <Text style={styles.otpDescription}>
+                  Your citizen details match our records.
+                  Enter the six-digit code generated for this
+                  activation attempt.
+                </Text>
+
+                {/* DEMO CODE DISPLAY */}
+
+                <View style={styles.demoCodeCard}>
+                  <Text style={styles.demoCodeLabel}>
+                    YOUR IN-APP DEMO CODE
                   </Text>
 
-                  <Text
-                    style={
-                      styles.accountVerifiedText
+                  <Text style={styles.demoCode}>
+                    {generatedOtp}
+                  </Text>
+
+                  <Text style={styles.demoCodeHint}>
+                    This code is displayed in-app for the
+                    demonstration version.
+                  </Text>
+                </View>
+
+                {/* COUNTDOWN */}
+
+                <View style={styles.expiryRow}>
+                  <Ionicons
+                    name="time-outline"
+                    size={17}
+                    color={
+                      remainingSeconds > 0
+                        ? COLORS.primary
+                        : COLORS.danger
                     }
+                  />
+
+                  <Text
+                    style={[
+                      styles.expiryText,
+                      remainingSeconds <= 0 && {
+                        color: COLORS.danger,
+                      },
+                    ]}
                   >
-                    Your identity has
-                    successfully passed all
-                    three verification checks.
+                    {remainingSeconds > 0
+                      ? `Code expires in ${formatTime(remainingSeconds)}`
+                      : "Activation code expired"}
+                  </Text>
+                </View>
+
+                {/* OTP INPUT */}
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>
+                    SIX-DIGIT ACTIVATION CODE
+                  </Text>
+
+                  <View style={styles.inputContainer}>
+                    <Ionicons
+                      name="lock-closed-outline"
+                      size={20}
+                      color={COLORS.textLight}
+                    />
+
+                    <TextInput
+                      placeholder="Enter six-digit code"
+                      placeholderTextColor="#8A949D"
+                      value={otp}
+                      onChangeText={(value) => {
+                        setOtp(value.replace(/\D/g, "").slice(0, 6));
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      style={styles.input}
+                    />
+                  </View>
+
+                  <Text style={styles.inputHint}>
+                    {MAX_OTP_ATTEMPTS - otpAttempts} attempts remaining.
                   </Text>
                 </View>
 
                 <TouchableOpacity
-                  onPress={
-                    handleContinue
-                  }
+                  onPress={handleConfirmOtp}
+                  disabled={loading || remainingSeconds <= 0}
                   activeOpacity={0.8}
-                  style={
-                    styles.continueButton
-                  }
+                  style={[
+                    styles.primaryButton,
+                    (loading || remainingSeconds <= 0) &&
+                      styles.buttonDisabled,
+                  ]}
                 >
-                  <Text
-                    style={
-                      styles.continueButtonText
-                    }
-                  >
+                  {loading ? (
+                    <>
+                      <ActivityIndicator
+                        color="#FFFFFF"
+                        size="small"
+                      />
+                      <Text style={styles.primaryButtonText}>
+                        {loadingMessage || "Please wait..."}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.primaryButtonText}>
+                        Confirm Code & Activate
+                      </Text>
+                      <Ionicons
+                        name="arrow-forward"
+                        size={18}
+                        color="#FFFFFF"
+                      />
+                    </>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleResendOtp}
+                  disabled={loading}
+                  style={styles.resendButton}
+                >
+                  <Ionicons
+                    name="refresh-outline"
+                    size={17}
+                    color={COLORS.primary}
+                  />
+
+                  <Text style={styles.resendText}>
+                    Generate a New Code
+                  </Text>
+                </TouchableOpacity>
+
+                <Text style={styles.attemptNotice}>
+                  A new code resets the attempt counter.
+                  The code is valid for five minutes.
+                </Text>
+              </>
+            )}
+
+            {/* STEP 3: ACTIVATION SUCCESS */}
+
+            {accountActivated && (
+              <>
+                <View style={styles.successCard}>
+                  <View style={styles.successIcon}>
+                    <Ionicons
+                      name="checkmark"
+                      size={30}
+                      color="#FFFFFF"
+                    />
+                  </View>
+
+                  <Text style={styles.successTitle}>
+                    Account Successfully Activated
+                  </Text>
+
+                  <Text style={styles.successDescription}>
+                    Your citizen details have been verified,
+                    your activation code was confirmed and
+                    this device has been registered.
+                  </Text>
+
+                  <View style={styles.registeredDevice}>
+                    <Ionicons
+                      name="phone-portrait-outline"
+                      size={19}
+                      color={COLORS.success}
+                    />
+
+                    <Text style={styles.registeredDeviceText}>
+                      This device is now linked to your account.
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  onPress={handleContinue}
+                  activeOpacity={0.8}
+                  style={styles.continueButton}
+                >
+                  <Text style={styles.primaryButtonText}>
                     Continue to Login
                   </Text>
 
@@ -1119,42 +967,30 @@ export default function VerifyAccountScreen({
             )}
           </Animated.View>
 
-          {/* =====================================================
-              SECURITY NOTICE
-          ===================================================== */}
+          {/* SECURITY NOTICE */}
 
-          <View
-            style={styles.securityNotice}
-          >
+          <View style={styles.securityNotice}>
             <Ionicons
               name="shield-checkmark-outline"
               size={19}
               color={COLORS.primary}
             />
 
-            <Text
-              style={styles.securityText}
-            >
-              Your information is securely
-              encrypted and only used to
-              verify your government record
-              and activate your citizen
-              account.
+            <Text style={styles.securityText}>
+              Your device is linked to your citizen account.
+              Login attempts from unregistered devices will
+              be rejected.
             </Text>
           </View>
 
-          {/* =====================================================
-              SUPPORT
-          ===================================================== */}
+          {/* SUPPORT */}
 
           <TouchableOpacity
             onPress={handleSupport}
             activeOpacity={0.7}
             style={styles.supportButton}
           >
-            <View
-              style={styles.supportIcon}
-            >
+            <View style={styles.supportIcon}>
               <Ionicons
                 name="chatbubble-ellipses-outline"
                 size={18}
@@ -1162,25 +998,13 @@ export default function VerifyAccountScreen({
               />
             </View>
 
-            <View
-              style={
-                styles.supportInformation
-              }
-            >
-              <Text
-                style={styles.supportTitle}
-              >
+            <View style={styles.supportInformation}>
+              <Text style={styles.supportTitle}>
                 Need Help?
               </Text>
 
-              <Text
-                style={
-                  styles.supportDescription
-                }
-              >
-                Contact support for
-                assistance with account
-                verification.
+              <Text style={styles.supportDescription}>
+                Contact support for assistance with account activation.
               </Text>
             </View>
 
@@ -1191,109 +1015,17 @@ export default function VerifyAccountScreen({
             />
           </TouchableOpacity>
 
-          {/* =====================================================
-              FOOTER
-          ===================================================== */}
+          {/* FOOTER */}
 
           <Text style={styles.footer}>
             TrafficConnect SA
           </Text>
 
-          <Text
-            style={styles.footerSubtext}
-          >
+          <Text style={styles.footerSubtext}>
             Secure Citizen Services
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* =========================================================
-          FACE VERIFICATION MODAL
-      ========================================================= */}
-
-      <Modal
-        visible={faceModalVisible}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={
-          handleFaceCancel
-        }
-      >
-        <SafeAreaView
-          style={
-            styles.faceModalContainer
-          }
-        >
-          {/* MODAL HEADER */}
-
-          <View
-            style={
-              styles.faceModalHeader
-            }
-          >
-            <TouchableOpacity
-              onPress={
-                handleFaceCancel
-              }
-              style={
-                styles.faceBackButton
-              }
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="arrow-back"
-                size={22}
-                color={COLORS.text}
-              />
-            </TouchableOpacity>
-
-            <View
-              style={
-                styles.faceModalHeaderText
-              }
-            >
-              <Text
-                style={
-                  styles.faceModalTitle
-                }
-              >
-                Face Verification
-              </Text>
-
-              <Text
-                style={
-                  styles.faceModalSubtitle
-                }
-              >
-                Final identity check
-              </Text>
-            </View>
-
-            <View
-              style={
-                styles.faceHeaderSpacer
-              }
-            />
-          </View>
-
-          {/* FACE SCANNER */}
-
-          <View
-            style={
-              styles.faceVerificationContainer
-            }
-          >
-<FaceVerificationScanner
-  visible={faceModalVisible}
-  onClose={handleFaceCancel}
-  onVerified={(imageUri) => {
-    console.log("✅ FACE VERIFIED:", imageUri);
-    handleFaceSuccess(imageUri);
-  }}
-/>
-          </View>
-        </SafeAreaView>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -1317,10 +1049,6 @@ const styles = StyleSheet.create({
     paddingTop: 30,
     paddingBottom: 35,
   },
-
-  // ===========================================================
-  // HEADER
-  // ===========================================================
 
   header: {
     alignItems: "center",
@@ -1349,6 +1077,7 @@ const styles = StyleSheet.create({
     fontSize: 25,
     fontWeight: "800",
     color: COLORS.text,
+    textAlign: "center",
   },
 
   subtitle: {
@@ -1359,10 +1088,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     textAlign: "center",
   },
-
-  // ===========================================================
-  // CARD
-  // ===========================================================
 
   verifyCard: {
     backgroundColor: COLORS.card,
@@ -1410,14 +1135,6 @@ const styles = StyleSheet.create({
     marginVertical: 15,
   },
 
-  // ===========================================================
-  // PROGRESS
-  // ===========================================================
-
-  progressHeader: {
-    marginBottom: 14,
-  },
-
   progressTitle: {
     fontSize: 12,
     fontWeight: "800",
@@ -1426,14 +1143,11 @@ const styles = StyleSheet.create({
 
   progressSubtitle: {
     marginTop: 3,
+    marginBottom: 14,
     fontSize: 9,
     lineHeight: 14,
     color: COLORS.textLight,
   },
-
-  // ===========================================================
-  // STEPS
-  // ===========================================================
 
   stepRow: {
     flexDirection: "row",
@@ -1461,18 +1175,10 @@ const styles = StyleSheet.create({
     borderColor: COLORS.success,
   },
 
-  stepCircleDisabled: {
-    backgroundColor: "#F4F6F8",
-  },
-
   stepNumber: {
     fontSize: 11,
     fontWeight: "800",
     color: COLORS.textLight,
-  },
-
-  stepNumberDisabled: {
-    color: "#AAB3BA",
   },
 
   stepInformation: {
@@ -1492,19 +1198,11 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
 
-  stepTitleDisabled: {
-    color: "#8A949D",
-  },
-
   stepDescription: {
     marginTop: 2,
     fontSize: 9,
     lineHeight: 14,
     color: COLORS.textLight,
-  },
-
-  stepDescriptionDisabled: {
-    color: "#9AA4AC",
   },
 
   stepLine: {
@@ -1530,29 +1228,17 @@ const styles = StyleSheet.create({
     color: COLORS.success,
   },
 
-  requiredBadge: {
-    marginLeft: 7,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 20,
-    backgroundColor: COLORS.softBlue,
-  },
-
-  requiredText: {
-    fontSize: 6.5,
-    fontWeight: "800",
-    letterSpacing: 0.4,
-    color: COLORS.primary,
-  },
-
-  // ===========================================================
-  // INPUT
-  // ===========================================================
-
   sectionDivider: {
     height: 1,
     backgroundColor: COLORS.border,
     marginVertical: 16,
+  },
+
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.text,
+    marginBottom: 13,
   },
 
   inputGroup: {
@@ -1594,196 +1280,180 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
-  // ===========================================================
-  // MESSAGE
-  // ===========================================================
-
-  messageContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 12,
-  },
-
-  successMessage: {
-    backgroundColor: COLORS.softGreen,
-    borderColor: "#B7E3CA",
-  },
-
-  errorMessage: {
-    backgroundColor: COLORS.softRed,
-    borderColor: "#F3C7C3",
-  },
-
-  infoMessage: {
-    backgroundColor: COLORS.softBlue,
-    borderColor: "#C7DDED",
-  },
-
-  messageText: {
-    flex: 1,
-    marginLeft: 7,
-    fontSize: 10,
-    lineHeight: 15,
-    fontWeight: "600",
-  },
-
-  // ===========================================================
-  // VERIFY BUTTON
-  // ===========================================================
-
-  verifyButton: {
-    height: 48,
+  primaryButton: {
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: COLORS.primary,
     borderRadius: 9,
-    marginTop: 2,
+    marginTop: 3,
+    paddingHorizontal: 12,
   },
 
-  verifyButtonDisabled: {
-    opacity: 0.7,
-  },
-
-  verifyButtonText: {
-    fontSize: 13,
+  primaryButtonText: {
+    fontSize: 12,
     fontWeight: "800",
     color: "#FFFFFF",
     marginRight: 8,
   },
 
-  // ===========================================================
-  // FACE
-  // ===========================================================
-
-  faceSection: {
-    backgroundColor: COLORS.softBlue,
-    borderWidth: 1,
-    borderColor: "#C7DDED",
-    borderRadius: 10,
-    padding: 11,
-    marginTop: 15,
+  buttonDisabled: {
+    opacity: 0.6,
   },
 
-  faceSectionHeader: {
+  otpHeader: {
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: 9,
   },
 
-  faceSectionTitle: {
-    marginLeft: 7,
-    fontSize: 11,
-    fontWeight: "800",
-    color: COLORS.primary,
-  },
-
-  faceSectionDescription: {
-    marginTop: 6,
-    fontSize: 9,
-    lineHeight: 14,
-    color: COLORS.text,
-  },
-
-  faceButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    borderRadius: 10,
-    padding: 11,
-    marginTop: 10,
-  },
-
-  faceIcon: {
+  otpIcon: {
     width: 38,
     height: 38,
     borderRadius: 9,
     backgroundColor: COLORS.softBlue,
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 10,
   },
 
-  faceInformation: {
-    flex: 1,
-    marginLeft: 10,
-    marginRight: 8,
+  otpDescription: {
+    fontSize: 10,
+    lineHeight: 16,
+    color: COLORS.textLight,
+    marginBottom: 13,
   },
 
-  faceTitle: {
-    fontSize: 12,
+  demoCodeCard: {
+    backgroundColor: COLORS.softBlue,
+    borderWidth: 1,
+    borderColor: "#C7DDED",
+    borderRadius: 10,
+    padding: 15,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+
+  demoCodeLabel: {
+    fontSize: 8,
+    fontWeight: "800",
+    letterSpacing: 1,
+    color: COLORS.primary,
+  },
+
+  demoCode: {
+    marginTop: 7,
+    fontSize: 31,
+    fontWeight: "900",
+    letterSpacing: 7,
+    color: COLORS.primaryDark,
+  },
+
+  demoCodeHint: {
+    marginTop: 6,
+    fontSize: 9,
+    color: COLORS.textLight,
+    textAlign: "center",
+  },
+
+  expiryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 15,
+  },
+
+  expiryText: {
+    marginLeft: 6,
+    fontSize: 10,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+
+  resendButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 13,
+  },
+
+  resendText: {
+    marginLeft: 6,
+    fontSize: 11,
     fontWeight: "800",
     color: COLORS.primary,
   },
 
-  faceDescription: {
-    marginTop: 2,
+  attemptNotice: {
+    textAlign: "center",
     fontSize: 9,
     lineHeight: 14,
     color: COLORS.textLight,
+    marginBottom: 4,
   },
 
-  // ===========================================================
-  // ACCOUNT VERIFIED
-  // ===========================================================
-
-  accountVerified: {
+  successCard: {
     alignItems: "center",
     backgroundColor: COLORS.softGreen,
     borderWidth: 1,
     borderColor: "#B7E3CA",
     borderRadius: 10,
     padding: 16,
-    marginTop: 16,
+    marginTop: 15,
   },
 
-  accountVerifiedIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  successIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: COLORS.success,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
 
-  accountVerifiedTitle: {
+  successTitle: {
     fontSize: 14,
     fontWeight: "800",
     color: COLORS.success,
+    textAlign: "center",
   },
 
-  accountVerifiedText: {
-    marginTop: 4,
+  successDescription: {
+    marginTop: 6,
     textAlign: "center",
-    fontSize: 9,
-    lineHeight: 14,
+    fontSize: 10,
+    lineHeight: 16,
     color: COLORS.text,
   },
 
+  registeredDevice: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 13,
+  },
+
+  registeredDeviceText: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 9,
+    fontWeight: "700",
+    color: COLORS.success,
+  },
+
   continueButton: {
-    height: 48,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: COLORS.success,
     borderRadius: 9,
-    marginTop: 10,
+    marginTop: 12,
   },
-
-  continueButtonText: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#FFFFFF",
-    marginRight: 8,
-  },
-
-  // ===========================================================
-  // SECURITY
-  // ===========================================================
 
   securityNotice: {
     flexDirection: "row",
@@ -1803,10 +1473,6 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: COLORS.text,
   },
-
-  // ===========================================================
-  // SUPPORT
-  // ===========================================================
 
   supportButton: {
     flexDirection: "row",
@@ -1847,10 +1513,6 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
   },
 
-  // ===========================================================
-  // FOOTER
-  // ===========================================================
-
   footer: {
     marginTop: 24,
     textAlign: "center",
@@ -1864,57 +1526,5 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 9,
     color: COLORS.textLight,
-  },
-
-  // ===========================================================
-  // FACE MODAL
-  // ===========================================================
-
-  faceModalContainer: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-
-  faceModalHeader: {
-    height: 64,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    backgroundColor: COLORS.card,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-
-  faceBackButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  faceModalHeaderText: {
-    flex: 1,
-    alignItems: "center",
-  },
-
-  faceModalTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: COLORS.text,
-  },
-
-  faceModalSubtitle: {
-    marginTop: 2,
-    fontSize: 9,
-    color: COLORS.textLight,
-  },
-
-  faceHeaderSpacer: {
-    width: 40,
-  },
-
-  faceVerificationContainer: {
-    flex: 1,
   },
 });

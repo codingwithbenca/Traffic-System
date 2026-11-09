@@ -21,14 +21,10 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import {
-  getDownloadURL,
-  ref,
-  uploadBytes,
-} from "firebase/storage";
 import { useNavigation } from "@react-navigation/native";
 
-import { db, storage } from "../../services/firebase";
+import { db } from "../../services/firebase";
+import { uploadDocumentToCloudinary } from "../../services/cloudinary";
 import { useAuth } from "../../context/AuthContext";
 
 /* =========================================================
@@ -50,6 +46,13 @@ const COLORS = {
   softGreen: "#ECFDF3",
   softYellow: "#FFF8E6",
 };
+
+// Maximum size allowed for each uploaded document.
+const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+// File types supported by the Cloudinary upload service.
+const ALLOWED_EXTENSIONS = ["pdf", "png", "jpg", "jpeg"];
 
 type UploadedFile = {
   name: string;
@@ -164,41 +167,22 @@ const createApplicationReference = () =>
     10000 + Math.random() * 90000
   )}`;
 
-const getFileExtension = (name: string) => {
-  const parts = name.split(".");
-  return parts.length > 1
-    ? parts[parts.length - 1].toLowerCase()
-    : "file";
-};
-
+/*
+ * Uploads one document to Cloudinary and returns the reference that is
+ * saved on the application. Both `url` and `downloadURL` are stored so
+ * dashboards reading either field keep working.
+ */
 const uploadApplicationDocument = async (
   file: UploadedFile,
-  applicationId: string,
-  documentType: string
+  applicationId: string
 ) => {
-  const response = await fetch(file.uri);
-
-  if (!response.ok) {
-    throw new Error(`Unable to read ${file.name}`);
-  }
-
-  const blob = await response.blob();
-  const extension = getFileExtension(file.name);
-  const storagePath =
-    `applications/${applicationId}/documents/${documentType}.${extension}`;
-
-  const storageRef = ref(storage, storagePath);
-
-  await uploadBytes(storageRef, blob, {
-    contentType: file.mimeType || "application/octet-stream",
-  });
-
-  const downloadURL = await getDownloadURL(storageRef);
+  const uploaded = await uploadDocumentToCloudinary(file, applicationId);
 
   return {
+    ...uploaded,
+    downloadURL: uploaded.url,
     name: file.name,
-    storagePath,
-    downloadURL,
+    fileName: file.name,
     size: file.size,
     contentType: file.mimeType || null,
   };
@@ -413,6 +397,29 @@ export default function ChangeOwnershipScreen() {
       const asset = result.assets?.[0];
       if (!asset) return;
 
+      // Only formats supported by the upload service are accepted.
+      const extension =
+        asset.name.split(".").pop()?.toLowerCase() || "";
+
+      if (!ALLOWED_EXTENSIONS.includes(extension)) {
+        Alert.alert(
+          "Unsupported File Type",
+          `"${asset.name}" cannot be uploaded. Please choose a PDF, JPG or PNG file.`
+        );
+        return;
+      }
+
+      // Reject files larger than the allowed maximum.
+      if (asset.size && asset.size > MAX_FILE_SIZE_BYTES) {
+        const sizeInMb = (asset.size / (1024 * 1024)).toFixed(1);
+
+        Alert.alert(
+          "File Too Large",
+          `"${asset.name}" is ${sizeInMb} MB. The maximum allowed size is ${MAX_FILE_SIZE_MB} MB. Please choose a smaller file.`
+        );
+        return;
+      }
+
       setDocuments((previous) => ({
         ...previous,
         [documentType]: {
@@ -542,7 +549,7 @@ export default function ChangeOwnershipScreen() {
    *
    * The identity fields are saved alongside the existing
    * submittedBy field. Existing vehicle and document fields
-   * remain in place.
+   * remain in place. Documents are uploaded to Cloudinary.
    */
   const handleSubmit = async () => {
     if (submitting) return;
@@ -662,8 +669,7 @@ export default function ChangeOwnershipScreen() {
         documentEntries.buyerIdCopy =
           await uploadApplicationDocument(
             documents.buyerIdCopy,
-            applicationRef.id,
-            "buyer-id"
+            applicationRef.id
           );
       }
 
@@ -671,8 +677,7 @@ export default function ChangeOwnershipScreen() {
         documentEntries.proofOfOwnership =
           await uploadApplicationDocument(
             documents.proofOfOwnership,
-            applicationRef.id,
-            "proof-of-ownership"
+            applicationRef.id
           );
       }
 
@@ -680,8 +685,7 @@ export default function ChangeOwnershipScreen() {
         documentEntries.saleAgreement =
           await uploadApplicationDocument(
             documents.saleAgreement,
-            applicationRef.id,
-            "sale-agreement"
+            applicationRef.id
           );
       }
 
@@ -689,8 +693,7 @@ export default function ChangeOwnershipScreen() {
         documentEntries.vehicleLicence =
           await uploadApplicationDocument(
             documents.vehicleLicence,
-            applicationRef.id,
-            "vehicle-licence"
+            applicationRef.id
           );
       }
 
@@ -820,7 +823,7 @@ export default function ChangeOwnershipScreen() {
                 Select document
               </Text>
               <Text style={styles.uploadHint}>
-                PDF, JPG or PNG
+                PDF, JPG or PNG {" • "} Max {MAX_FILE_SIZE_MB} MB
               </Text>
             </View>
 
@@ -1598,7 +1601,7 @@ export default function ChangeOwnershipScreen() {
             <View style={styles.divider} />
 
             {renderNotice(
-              "Documents must be clear and readable. PDF, JPG and PNG files are accepted."
+              `Documents must be clear and readable. PDF, JPG and PNG files are accepted, up to ${MAX_FILE_SIZE_MB} MB per file.`
             )}
 
             {renderDocumentUpload(

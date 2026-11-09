@@ -1,22 +1,35 @@
+
+import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
+import DeviceGateScreen from "../screens/DeviceGateScreen";
 import LoginScreen from "../auth/LoginScreen";
-import SignupScreen from "../auth/SignupScreen";
 import ForgotPasswordScreen from "../auth/ForgotPasswordScreen";
 
 const Stack = createNativeStackNavigator();
 
-export default function AuthNavigator({ setIsLoggedIn }: any) {
+export default function AuthNavigator() {
   return (
-    <Stack.Navigator>
-      <Stack.Screen name="Login" options={{ headerShown: false }}>
-        {(props) => (
-          <LoginScreen {...props} setIsLoggedIn={setIsLoggedIn} />
-        )}
-      </Stack.Screen>
+    <Stack.Navigator
+      initialRouteName="DeviceGate"
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      <Stack.Screen
+        name="DeviceGate"
+        component={DeviceGateScreen}
+      />
 
-      <Stack.Screen name="Signup" component={SignupScreen} />
-      <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+      <Stack.Screen
+        name="Login"
+        component={LoginScreen}
+      />
+
+      <Stack.Screen
+        name="ForgotPassword"
+        component={ForgotPasswordScreen}
+      />
     </Stack.Navigator>
   );
 }

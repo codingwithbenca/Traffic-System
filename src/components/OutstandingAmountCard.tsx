@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,8 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   collection,
   doc,
-  getDoc,
-  getDocs,
+  onSnapshot,
   query,
   where,
 } from "firebase/firestore";
@@ -155,118 +153,147 @@ export default function OutstandingAmountCard({
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
 
-  useEffect(() => {
-    let active = true;
+  // Incrementing this restarts the live listeners (used by "Tap to try again").
+  const [reloadKey, setReloadKey] = useState(0);
 
-    const loadOutstandingFines = async () => {
-      if (!citizenId.trim()) {
-        setTotal(0);
-        setFineCount(0);
-        setLoading(false);
-        setLoadFailed(false);
-        return;
+  /*
+   * LIVE LISTENERS
+   *
+   * The card listens to the citizen's fines (collection and older embedded
+   * records). Whenever a fine is added, paid or changed, the total updates
+   * automatically without leaving the app.
+   */
+  useEffect(() => {
+    if (!citizenId.trim()) {
+      setTotal(0);
+      setFineCount(0);
+      setLoading(false);
+      setLoadFailed(false);
+      return;
+    }
+
+    setLoading(true);
+    setLoadFailed(false);
+
+    let collectionFines: FineRecord[] = [];
+    let embeddedFines: FineRecord[] = [];
+    let collectionReady = false;
+    let embeddedReady = false;
+
+    const recalculate = () => {
+      // Wait until both sources have reported at least once.
+      if (!collectionReady || !embeddedReady) return;
+
+      const allFines: FineRecord[] = [
+        ...collectionFines,
+        ...embeddedFines,
+      ];
+
+      // Prevent the same fine from being counted twice.
+      const seenIdentifiers = new Set<string>();
+      const uniqueFines: FineRecord[] = [];
+
+      for (const fine of allFines) {
+        const identifiers = getFineIdentifiers(fine);
+
+        const alreadyExists = identifiers.some((identifier) =>
+          seenIdentifiers.has(identifier)
+        );
+
+        if (alreadyExists) {
+          continue;
+        }
+
+        uniqueFines.push(fine);
+
+        identifiers.forEach((identifier) =>
+          seenIdentifiers.add(identifier)
+        );
       }
 
-      try {
-        setLoading(true);
-        setLoadFailed(false);
+      const outstandingFines = uniqueFines.filter(
+        isOutstandingFine
+      );
 
-        // Load fines belonging to this citizen.
-        const finesQuery = query(
-          collection(db, "fines"),
-          where("citizenId", "==", citizenId)
-        );
+      const amount = outstandingFines.reduce(
+        (sum, fine) => sum + getFineAmount(fine),
+        0
+      );
 
-        const finesSnapshot = await getDocs(finesQuery);
+      setTotal(amount);
+      setFineCount(outstandingFines.length);
+      setLoadFailed(false);
+      setLoading(false);
+    };
 
-        const allFines: FineRecord[] =
-          finesSnapshot.docs.map((fineDocument) => ({
-            ...(fineDocument.data() as Fine),
-            documentId: fineDocument.id,
-            allowMissingStatus: false,
-          }));
+    const handleError = (error: unknown) => {
+      console.error("Failed to load outstanding fines:", error);
 
-        // Keep support for older embedded citizen records.
-        const citizenSnapshot = await getDoc(
-          doc(db, "citizens", citizenId)
-        );
+      setTotal(0);
+      setFineCount(0);
+      setLoadFailed(true);
+      setLoading(false);
+    };
 
-        if (citizenSnapshot.exists()) {
-          const citizenData = citizenSnapshot.data();
+    // Fines belonging to this citizen.
+    const unsubscribeFines = onSnapshot(
+      query(
+        collection(db, "fines"),
+        where("citizenId", "==", citizenId)
+      ),
+      (snapshot) => {
+        collectionFines = snapshot.docs.map((fineDocument) => ({
+          ...(fineDocument.data() as Fine),
+          documentId: fineDocument.id,
+          allowMissingStatus: false,
+        }));
 
-          const embeddedFines: Fine[] = Array.isArray(
-            citizenData.fines
-          )
+        collectionReady = true;
+        recalculate();
+      },
+      handleError
+    );
+
+    // Keep support for older embedded citizen records.
+    const unsubscribeCitizen = onSnapshot(
+      doc(db, "citizens", citizenId),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const citizenData = snapshot.data();
+
+          const embedded: Fine[] = Array.isArray(citizenData.fines)
             ? citizenData.fines
             : [];
 
-          allFines.push(
-            ...embeddedFines.map((fine) => ({
-              ...fine,
-              allowMissingStatus: true,
-            }))
-          );
+          embeddedFines = embedded.map((fine) => ({
+            ...fine,
+            allowMissingStatus: true,
+          }));
+        } else {
+          embeddedFines = [];
         }
 
-        // Prevent the same fine from being counted twice.
-        const seenIdentifiers = new Set<string>();
-        const uniqueFines: FineRecord[] = [];
-
-        for (const fine of allFines) {
-          const identifiers = getFineIdentifiers(fine);
-
-          const alreadyExists = identifiers.some((identifier) =>
-            seenIdentifiers.has(identifier)
-          );
-
-          if (alreadyExists) {
-            continue;
-          }
-
-          uniqueFines.push(fine);
-
-          identifiers.forEach((identifier) =>
-            seenIdentifiers.add(identifier)
-          );
-        }
-
-        const outstandingFines = uniqueFines.filter(
-          isOutstandingFine
-        );
-
-        const amount = outstandingFines.reduce(
-          (sum, fine) => sum + getFineAmount(fine),
-          0
-        );
-
-        if (active) {
-          setTotal(amount);
-          setFineCount(outstandingFines.length);
-        }
-      } catch (error) {
-        console.error(
-          "Failed to load outstanding fines:",
-          error
-        );
-
-        if (active) {
-          setTotal(0);
-          setFineCount(0);
-          setLoadFailed(true);
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadOutstandingFines();
+        embeddedReady = true;
+        recalculate();
+      },
+      handleError
+    );
 
     return () => {
-      active = false;
+      unsubscribeFines();
+      unsubscribeCitizen();
     };
-  }, [citizenId]);
+  }, [citizenId, reloadKey]);
+
+  // When loading failed the card retries; otherwise it opens the fines.
+  const handlePress = () => {
+    if (loadFailed) {
+      setReloadKey((key) => key + 1);
+      return;
+    }
+
+    onPress?.();
+  };
 
   const formattedAmount = total.toLocaleString("en-ZA", {
     minimumFractionDigits: 2,
@@ -280,7 +307,7 @@ export default function OutstandingAmountCard({
     <TouchableOpacity
       style={styles.card}
       activeOpacity={0.92}
-      onPress={onPress}
+      onPress={handlePress}
       accessibilityRole="button"
       accessibilityLabel={
         loading

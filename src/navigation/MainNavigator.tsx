@@ -11,9 +11,10 @@ import TabNavigator from "./TabNavigator";
 import NotificationsScreen from "../screens/HOME/notifications";
 import ProfileScreen from "../screens/HOME/profile";
 import DriverLicenseScreen from "../screens/HOME/driver-license";
-
+import PrivacyScreen from "../screens/HOME/privacy";
+import HelpScreen from "../screens/HOME/help";
 import AppointmentsScreen from "../screens/HOME/appointments";
-
+import AboutScreen from "../screens/HOME/about";
 /* =========================================================
    LICENSES
 ========================================================= */
@@ -111,6 +112,21 @@ export default function MainNavigator() {
         component={ProfileScreen}
         options={{ title: "Profile" }}
       />
+<Stack.Screen
+  name="Privacy"
+  component={PrivacyScreen}
+  options={{
+    title: "Security & Privacy",
+  }}
+/>
+
+<Stack.Screen
+  name="Help"
+  component={HelpScreen}
+  options={{
+    title: "Help & Support",
+  }}
+/>
 
       <Stack.Screen
         name="DriverLicense"
@@ -317,7 +333,13 @@ export default function MainNavigator() {
         component={UploadDocumentsScreen}
         options={{ title: "Upload Supporting Documents" }}
       />
-
+<Stack.Screen
+  name="About"
+  component={AboutScreen}
+  options={{
+    title: "About TrafficConnect SA",
+  }}
+/>
       <Stack.Screen
         name="ApplicationsDashboard"
         component={ApplicationsDashboardScreen}

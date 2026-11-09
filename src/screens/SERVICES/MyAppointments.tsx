@@ -1,4 +1,3 @@
-
 import React, {
   useCallback,
   useEffect,
@@ -34,6 +33,53 @@ import type {
 } from "../../services/appointmentService";
 
 /* =========================================================
+   FILTER TABS
+========================================================= */
+
+type FilterKey = "upcoming" | "completed" | "cancelled" | "all";
+
+const FILTERS: {
+  key: FilterKey;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { key: "upcoming", label: "Upcoming", icon: "calendar-outline" },
+  { key: "completed", label: "Completed", icon: "checkmark-circle-outline" },
+  { key: "cancelled", label: "Cancelled", icon: "close-circle-outline" },
+  { key: "all", label: "All", icon: "list-outline" },
+];
+
+const EMPTY_MESSAGES: Record<
+  FilterKey,
+  {
+    icon: keyof typeof Ionicons.glyphMap;
+    title: string;
+    description: string;
+  }
+> = {
+  upcoming: {
+    icon: "calendar-outline",
+    title: "No upcoming appointments",
+    description: "You don't have any upcoming appointments.",
+  },
+  completed: {
+    icon: "checkmark-circle-outline",
+    title: "No completed appointments",
+    description: "Appointments you have attended will appear here.",
+  },
+  cancelled: {
+    icon: "close-circle-outline",
+    title: "No cancelled appointments",
+    description: "Appointments you cancel will appear here.",
+  },
+  all: {
+    icon: "calendar-outline",
+    title: "No appointments yet",
+    description: "Book your first appointment to get started.",
+  },
+};
+
+/* =========================================================
    MAIN SCREEN
 ========================================================= */
 
@@ -52,6 +98,9 @@ export default function MyAppointments() {
     useState<FirestoreAppointment | null>(null);
 
   const [cancelling, setCancelling] = useState(false);
+
+  const [activeFilter, setActiveFilter] =
+    useState<FilterKey>("upcoming");
 
   /* =======================================================
      LOAD APPOINTMENTS
@@ -125,15 +174,47 @@ export default function MyAppointments() {
     [appointments]
   );
 
-  const previousAppointments = useMemo(
+  const completedAppointments = useMemo(
     () =>
       appointments.filter(
-        (appointment) =>
-          appointment.status === "completed" ||
-          appointment.status === "cancelled"
+        (appointment) => appointment.status === "completed"
       ),
     [appointments]
   );
+
+  const cancelledAppointments = useMemo(
+    () =>
+      appointments.filter(
+        (appointment) => appointment.status === "cancelled"
+      ),
+    [appointments]
+  );
+
+  const counts: Record<FilterKey, number> = {
+    upcoming: upcomingAppointments.length,
+    completed: completedAppointments.length,
+    cancelled: cancelledAppointments.length,
+    all: appointments.length,
+  };
+
+  const visibleAppointments = useMemo(() => {
+    switch (activeFilter) {
+      case "upcoming":
+        return upcomingAppointments;
+      case "completed":
+        return completedAppointments;
+      case "cancelled":
+        return cancelledAppointments;
+      default:
+        return appointments;
+    }
+  }, [
+    activeFilter,
+    appointments,
+    upcomingAppointments,
+    completedAppointments,
+    cancelledAppointments,
+  ]);
 
   /* =======================================================
      CANCEL APPOINTMENT
@@ -385,9 +466,21 @@ export default function MyAppointments() {
      MAIN
   ======================================================= */
 
+  const activeMeta = FILTERS.find(
+    (filter) => filter.key === activeFilter
+  );
+
   return (
     <SafeAreaView style={styles.screen}>
       <Header onBack={() => navigation.goBack()} />
+
+      {/* FILTER TABS (always visible, no scrolling needed) */}
+
+      <FilterTabs
+        active={activeFilter}
+        counts={counts}
+        onChange={setActiveFilter}
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -401,51 +494,19 @@ export default function MyAppointments() {
           />
         }
       >
-        {/* SUMMARY */}
-
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
-            <Ionicons
-              name="calendar"
-              size={24}
-              color="#FFFFFF"
-            />
-          </View>
-
-          <View style={styles.summaryContent}>
-            <Text style={styles.summaryTitle}>
-              Your appointments
-            </Text>
-
-            <Text style={styles.summaryDescription}>
-              Manage your upcoming visits and appointment history.
-            </Text>
-          </View>
-
-          <View style={styles.totalBadge}>
-            <Text style={styles.totalNumber}>
-              {appointments.length}
-            </Text>
-
-            <Text style={styles.totalLabel}>Total</Text>
-          </View>
-        </View>
-
-        {/* UPCOMING */}
-
         <SectionHeader
-          title="Upcoming"
-          count={upcomingAppointments.length}
+          title={activeMeta?.label ?? "Appointments"}
+          count={visibleAppointments.length}
         />
 
-        {upcomingAppointments.length === 0 ? (
+        {visibleAppointments.length === 0 ? (
           <EmptyState
-            icon="calendar-outline"
-            title="No upcoming appointments"
-            description="You don't have any upcoming appointments."
+            icon={EMPTY_MESSAGES[activeFilter].icon}
+            title={EMPTY_MESSAGES[activeFilter].title}
+            description={EMPTY_MESSAGES[activeFilter].description}
           />
         ) : (
-          upcomingAppointments.map((appointment) => (
+          visibleAppointments.map((appointment) => (
             <AppointmentCard
               key={appointment.id}
               appointment={appointment}
@@ -454,31 +515,12 @@ export default function MyAppointments() {
           ))
         )}
 
-        {/* PREVIOUS */}
+        <View style={styles.bottomSpace} />
+      </ScrollView>
 
-        <SectionHeader
-          title="Previous"
-          count={previousAppointments.length}
-        />
+      {/* BOOK BUTTON (pinned at the bottom) */}
 
-        {previousAppointments.length === 0 ? (
-          <EmptyState
-            icon="time-outline"
-            title="No previous appointments"
-            description="Completed and cancelled appointments will appear here."
-          />
-        ) : (
-          previousAppointments.map((appointment) => (
-            <AppointmentCard
-              key={appointment.id}
-              appointment={appointment}
-              onPress={() => setSelectedAppointment(appointment)}
-            />
-          ))
-        )}
-
-        {/* BOOK BUTTON */}
-
+      <View style={styles.footer}>
         <TouchableOpacity
           style={styles.bookButton}
           activeOpacity={0.85}
@@ -512,9 +554,7 @@ export default function MyAppointments() {
             color="#FFFFFF"
           />
         </TouchableOpacity>
-
-        <View style={styles.bottomSpace} />
-      </ScrollView>
+      </View>
 
       {/* DETAILS */}
 
@@ -561,6 +601,68 @@ function Header({
         <Text style={styles.headerSubtitle}>
           Manage your bookings
         </Text>
+      </View>
+    </View>
+  );
+}
+
+/* =========================================================
+   FILTER TABS COMPONENT
+========================================================= */
+
+function FilterTabs({
+  active,
+  counts,
+  onChange,
+}: {
+  active: FilterKey;
+  counts: Record<FilterKey, number>;
+  onChange: (key: FilterKey) => void;
+}) {
+  return (
+    <View style={styles.tabsWrapper}>
+      <View style={styles.tabsTrack}>
+        {FILTERS.map((filter) => {
+          const isActive = filter.key === active;
+
+          return (
+            <TouchableOpacity
+              key={filter.key}
+              style={[
+                styles.tab,
+                isActive && styles.tabActive,
+              ]}
+              activeOpacity={0.8}
+              onPress={() => onChange(filter.key)}
+            >
+              <Text
+                style={[
+                  styles.tabLabel,
+                  isActive && styles.tabLabelActive,
+                ]}
+                numberOfLines={1}
+              >
+                {filter.label}
+              </Text>
+
+              <View
+                style={[
+                  styles.tabCount,
+                  isActive && styles.tabCountActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabCountText,
+                    isActive && styles.tabCountTextActive,
+                  ]}
+                >
+                  {counts[filter.key]}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </View>
   );
@@ -1048,6 +1150,75 @@ const styles = StyleSheet.create({
     color: "#64748B",
   },
 
+  /* ---------- Filter tabs ---------- */
+
+  tabsWrapper: {
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+
+  tabsTrack: {
+    flexDirection: "row",
+    backgroundColor: "#F1F5F9",
+    borderRadius: 14,
+    padding: 4,
+    gap: 4,
+  },
+
+  tab: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 11,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  tabActive: {
+    backgroundColor: "#2563EB",
+  },
+
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#64748B",
+  },
+
+  tabLabelActive: {
+    color: "#FFFFFF",
+  },
+
+  tabCount: {
+    marginTop: 3,
+    minWidth: 20,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    backgroundColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  tabCountActive: {
+    backgroundColor: "rgba(255,255,255,0.25)",
+  },
+
+  tabCountText: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: "#475569",
+  },
+
+  tabCountTextActive: {
+    color: "#FFFFFF",
+  },
+
+  /* ---------- List ---------- */
+
   scroll: {
     flex: 1,
   },
@@ -1055,64 +1226,6 @@ const styles = StyleSheet.create({
   content: {
     padding: 18,
     paddingBottom: 25,
-  },
-
-  summaryCard: {
-    backgroundColor: "#2563EB",
-    borderRadius: 19,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-
-  summaryIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.18)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  summaryContent: {
-    flex: 1,
-    marginLeft: 12,
-    marginRight: 8,
-  },
-
-  summaryTitle: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#FFFFFF",
-  },
-
-  summaryDescription: {
-    marginTop: 3,
-    fontSize: 10,
-    lineHeight: 15,
-    color: "rgba(255,255,255,0.82)",
-  },
-
-  totalBadge: {
-    width: 47,
-    height: 47,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  totalNumber: {
-    fontSize: 17,
-    fontWeight: "900",
-    color: "#2563EB",
-  },
-
-  totalLabel: {
-    fontSize: 8,
-    fontWeight: "700",
-    color: "#64748B",
   },
 
   sectionHeader: {
@@ -1263,6 +1376,17 @@ const styles = StyleSheet.create({
     color: "#64748B",
   },
 
+  /* ---------- Pinned book button ---------- */
+
+  footer: {
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 14,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+
   bookButton: {
     minHeight: 60,
     borderRadius: 16,
@@ -1270,7 +1394,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 4,
   },
 
   bookIcon: {
