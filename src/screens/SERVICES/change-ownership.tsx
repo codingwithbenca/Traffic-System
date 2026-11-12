@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -50,7 +51,7 @@ const COLORS = {
 // Maximum size allowed for each uploaded document.
 const MAX_FILE_SIZE_MB = 5;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
-
+const OWNERSHIP_SUPPORT_PHONE = "0123456789";
 // File types supported by the Cloudinary upload service.
 const ALLOWED_EXTENSIONS = ["pdf", "png", "jpg", "jpeg"];
 
@@ -284,7 +285,28 @@ export default function ChangeOwnershipScreen() {
   const checkExistingApplication = useCallback(() => {
     setReloadKey((key) => key + 1);
   }, []);
+const handleContactSupport = async () => {
+  const phoneUrl = `tel:${OWNERSHIP_SUPPORT_PHONE}`;
 
+  try {
+    const supported = await Linking.canOpenURL(phoneUrl);
+
+    if (!supported) {
+      Alert.alert(
+        "Unable to Make Call",
+        `Please call ${OWNERSHIP_SUPPORT_PHONE} directly.`
+      );
+      return;
+    }
+
+    await Linking.openURL(phoneUrl);
+  } catch (error) {
+    Alert.alert(
+      "Unable to Make Call",
+      `Please call ${OWNERSHIP_SUPPORT_PHONE} directly.`
+    );
+  }
+};
   useEffect(() => {
     if (authLoading) return;
 
@@ -1167,7 +1189,42 @@ export default function ChangeOwnershipScreen() {
               value={applicationStatus}
             />
           </View>
+{!approved && !rejected && (
+  <View style={styles.card}>
+    <Text style={styles.sectionHeader}>
+      Need to Cancel This Application?
+    </Text>
 
+    <Text style={styles.noticeText}>
+      If you wish to cancel your ownership-transfer
+      application, please contact our support team.
+      Our team will assist you with the cancellation.
+    </Text>
+
+    <TouchableOpacity
+      style={styles.btnPrimary}
+      onPress={handleContactSupport}
+      activeOpacity={0.8}
+    >
+      <Ionicons
+        name="call-outline"
+        size={19}
+        color="#FFFFFF"
+      />
+
+      <Text style={styles.btnPrimaryText}>
+        Contact Support
+      </Text>
+    </TouchableOpacity>
+
+    <Text style={styles.noticeText}>
+      Please provide your application reference when
+      contacting support:
+      {"\n"}
+      {existingApplication.applicationId || existingApplication.id}
+    </Text>
+  </View>
+)}
           {!isDecided(existingApplication.status) && (
             <View style={styles.noticeBox}>
               <Ionicons
@@ -2340,4 +2397,127 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     marginBottom: 6,
   },
+  cancellationCard: {
+  backgroundColor: COLORS.card,
+  borderWidth: 1,
+  borderColor: "#E6D9BE",
+  borderRadius: 15,
+  padding: 17,
+  marginBottom: 16,
+},
+
+cancellationHeader: {
+  flexDirection: "row",
+  alignItems: "center",
+  marginBottom: 18,
+},
+
+cancellationIcon: {
+  width: 44,
+  height: 44,
+  borderRadius: 12,
+  backgroundColor: "#FFF4DF",
+  alignItems: "center",
+  justifyContent: "center",
+  marginRight: 11,
+},
+
+cancellationTitle: {
+  fontSize: 14,
+  fontWeight: "800",
+  color: COLORS.text,
+},
+
+cancellationSubtitle: {
+  fontSize: 11,
+  color: COLORS.textLight,
+  marginTop: 3,
+},
+
+supportBadge: {
+  backgroundColor: "#FFF4DF",
+  paddingHorizontal: 9,
+  paddingVertical: 6,
+  borderRadius: 20,
+},
+
+supportBadgeText: {
+  fontSize: 9,
+  fontWeight: "800",
+  color: "#A66A12",
+  letterSpacing: 0.6,
+},
+
+cancellationHeading: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: COLORS.text,
+  marginBottom: 7,
+},
+
+cancellationDescription: {
+  fontSize: 12,
+  lineHeight: 19,
+  color: COLORS.textLight,
+  marginBottom: 15,
+},
+
+referenceBox: {
+  backgroundColor: "#F3F6F9",
+  borderWidth: 1,
+  borderColor: COLORS.border,
+  borderRadius: 10,
+  padding: 13,
+  marginBottom: 15,
+},
+
+referenceLabel: {
+  fontSize: 9,
+  fontWeight: "800",
+  color: COLORS.textLight,
+  letterSpacing: 0.8,
+},
+
+referenceValue: {
+  fontSize: 16,
+  fontWeight: "800",
+  color: COLORS.primary,
+  marginTop: 6,
+},
+
+referenceHint: {
+  fontSize: 10,
+  color: COLORS.textLight,
+  marginTop: 4,
+},
+
+cancellationButton: {
+  minHeight: 49,
+  backgroundColor: COLORS.primary,
+  borderRadius: 10,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 10,
+  marginBottom: 13,
+},
+
+cancellationButtonText: {
+  color: "#FFFFFF",
+  fontSize: 13,
+  fontWeight: "800",
+},
+
+cancellationFooter: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+  gap: 7,
+},
+
+cancellationFooterText: {
+  flex: 1,
+  color: COLORS.textLight,
+  fontSize: 10,
+  lineHeight: 16,
+},
 });

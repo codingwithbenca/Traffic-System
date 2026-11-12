@@ -11,6 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
+import NFCVerificationScreen from "../screens/LICENSES/nfc-verification";
 
 /* =========================================================
    COLOURS
@@ -230,6 +231,12 @@ export default function MyLicensesScreen() {
           screen="DigitalLicense"
         />
 
+<ActionItem
+  icon="scan-outline"
+  title="Verify Driver's Licence"
+  description="Verify your physical driver's licence using NFC."
+  screen="NFCVerification"
+/>
         <ActionItem
           icon="refresh-outline"
           title="Renew Driver's Licence"

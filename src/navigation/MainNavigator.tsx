@@ -25,7 +25,7 @@ import QRCodeScreen from "../screens/LICENSES/qr-code";
 import NFCVerificationScreen from "../screens/LICENSES/nfc-verification";
 import RenewDriverLicenseScreen from "../screens/LICENSES/renew-driver-license";
 import VehicleInformationScreen from "../screens/LICENSES/vehicle-information";
-import RenewVehicleLicenseScreen from "../screens/LICENSES/renew-vehicle-license";
+//import RenewVehicleLicenseScreen from "../screens/LICENSES/renew-vehicle-license";
 
 /* =========================================================
    PAYMENTS
@@ -182,11 +182,11 @@ export default function MainNavigator() {
         options={{ title: "Vehicle Information" }}
       />
 
-      <Stack.Screen
-        name="RenewVehicleLicense"
-        component={RenewVehicleLicenseScreen}
-        options={{ title: "Renew Vehicle License" }}
-      />
+   <Stack.Screen
+   name = "nfc-verification"
+   component = {NFCVerificationScreen}
+   options = {{ title: "NFC Verification" }}
+   />
 
       {/* =====================================================
           PAYMENTS

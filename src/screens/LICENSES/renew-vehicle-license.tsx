@@ -269,7 +269,7 @@ export default function RenewVehicleLicenseScreen() {
       );
       return;
     }
-
+ 
     const renewalInfo = getRenewalInfo(
       vehicle.licenceDisk?.expiryDate
     );

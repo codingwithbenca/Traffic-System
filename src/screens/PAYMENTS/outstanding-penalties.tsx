@@ -1,17 +1,32 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import * as SecureStore from "expo-secure-store";
+import * as Haptics from "expo-haptics";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 
 import {
   collection,
@@ -96,7 +111,51 @@ type PaymentReceipt = {
   amount: number;
   ticketId: string;
   method: string;
+  detail: string;
   paidAt: Date;
+};
+
+type PaymentStep =
+  | "method"
+  | "card_form"
+  | "otp"
+  | "bank_select"
+  | "bank_redirect"
+  | "bank_approve"
+  | "processing"
+  | "receipt"
+  | "failed";
+
+type CardBrand = "Visa" | "Mastercard" | "Amex" | "Card";
+
+type SavedCard = {
+  id: string;
+  brand: CardBrand;
+  last4: string;
+  expiry: string; // MM/YY
+  holder: string;
+  alwaysDecline?: boolean;
+};
+
+type PaymentContext = {
+  methodId: PaymentMethodId;
+  detail: string;
+  cardBrand?: CardBrand;
+  cardLast4?: string;
+  bank?: string;
+  declined?: boolean;
+  cardToSave?: SavedCard | null;
+};
+
+type PaymentRecord = {
+  id: string;
+  reference: string;
+  amount: number;
+  methodLabel: string;
+  detail: string;
+  status: string;
+  ticketId: string;
+  createdAt: Date | null;
 };
 
 const PAYMENT_METHODS: {
@@ -108,22 +167,128 @@ const PAYMENT_METHODS: {
   {
     id: "card",
     title: "Card payment",
-    description: "Debit or credit card (simulated)",
+    description: "Saved or new debit / credit card",
     icon: "credit-card",
   },
   {
     id: "eft",
     title: "Instant EFT",
-    description: "Pay from your bank account (simulated)",
+    description: "Approve from your bank account",
     icon: "account-balance",
   },
   {
     id: "wallet",
     title: "Digital wallet",
-    description: "Pay from your wallet balance (simulated)",
+    description: "Pay from your wallet balance",
     icon: "account-balance-wallet",
   },
 ];
+
+const BANKS = [
+  "FNB",
+  "Standard Bank",
+  "Capitec",
+  "Nedbank",
+  "ABSA",
+  "TymeBank",
+];
+
+const PROCESSING_STAGES = [
+  "Securing connection",
+  "Verifying payment details",
+  "Contacting your bank",
+  "Processing payment on server",
+  "Confirming with Traffic Services",
+];
+
+// Test card that always gets declined (handy for demoing a failure).
+const DECLINE_TEST_NUMBER = "4000000000000002";
+
+const DEFAULT_WALLET_BALANCE = 5000;
+const MAX_OTP_ATTEMPTS = 3;
+
+/* =========================================================
+   HELPERS (outside component)
+========================================================= */
+
+const wait = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const onlyDigits = (value: string) => value.replace(/\D/g, "");
+
+const formatCardNumber = (value: string) =>
+  onlyDigits(value)
+    .slice(0, 19)
+    .replace(/(.{4})/g, "$1 ")
+    .trim();
+
+const formatExpiry = (value: string) => {
+  const digits = onlyDigits(value).slice(0, 4);
+  return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+};
+
+const detectBrand = (number: string): CardBrand => {
+  const digits = onlyDigits(number);
+  const two = Number(digits.slice(0, 2));
+  const four = Number(digits.slice(0, 4));
+
+  if (digits.startsWith("4")) return "Visa";
+  if ((two >= 51 && two <= 55) || (four >= 2221 && four <= 2720)) {
+    return "Mastercard";
+  }
+  if (two === 34 || two === 37) return "Amex";
+  return "Card";
+};
+
+const passesLuhn = (number: string) => {
+  const digits = onlyDigits(number);
+  let sum = 0;
+  let double = false;
+
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let n = Number(digits[i]);
+
+    if (double) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+
+    sum += n;
+    double = !double;
+  }
+
+  return digits.length > 0 && sum % 10 === 0;
+};
+
+const isExpiryValid = (expiry: string) => {
+  const match = /^(\d{2})\/(\d{2})$/.exec(expiry);
+  if (!match) return false;
+
+  const month = Number(match[1]);
+  const year = 2000 + Number(match[2]);
+
+  if (month < 1 || month > 12) return false;
+
+  // Card is valid until the end of the expiry month.
+  return new Date(year, month, 1).getTime() > Date.now();
+};
+
+const buzz = (type: Haptics.NotificationFeedbackType) => {
+  Haptics.notificationAsync(type).catch(() => {});
+};
+
+const toDate = (value: any): Date | null => {
+  if (!value) return null;
+  try {
+    if (typeof value === "object" && typeof value.toDate === "function") {
+      return value.toDate();
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  } catch {
+    return null;
+  }
+};
 
 /* =========================================================
    SCREEN
@@ -136,12 +301,118 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Payment history
+  const [history, setHistory] = useState<PaymentRecord[]>([]);
+
   // Simulated payment state
   const [payingFine, setPayingFine] = useState<DisplayFine | null>(null);
   const [selectedMethod, setSelectedMethod] =
     useState<PaymentMethodId>("card");
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<PaymentReceipt | null>(null);
+
+  // Payment flow state
+  const [step, setStep] = useState<PaymentStep>("method");
+  const [stageIndex, setStageIndex] = useState(0);
+  const [failureMessage, setFailureMessage] = useState("");
+  const [paymentCtx, setPaymentCtx] = useState<PaymentContext | null>(null);
+
+  // Cards
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string>("new");
+  const [cvv, setCvv] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardHolder, setCardHolder] = useState("");
+  const [saveNewCard, setSaveNewCard] = useState(true);
+  const [formError, setFormError] = useState("");
+
+  // OTP
+  const [otpCode, setOtpCode] = useState("");
+  const [otpInput, setOtpInput] = useState("");
+  const [otpAttempts, setOtpAttempts] = useState(0);
+  const [otpError, setOtpError] = useState("");
+  const [bannerVisible, setBannerVisible] = useState(false);
+  const bannerAnim = useRef(new Animated.Value(-90)).current;
+
+  // Bank
+  const [selectedBank, setSelectedBank] = useState<string>(BANKS[0]);
+
+  // Wallet
+  const [walletBalance, setWalletBalance] = useState(DEFAULT_WALLET_BALANCE);
+
+  /* =======================================================
+     SECURE STORAGE (cards + wallet live on the phone)
+  ======================================================= */
+
+  const cardsKey = user?.idNumber ? `saved_cards_${user.idNumber}` : null;
+  const walletKey = user?.idNumber ? `wallet_balance_${user.idNumber}` : null;
+
+  const loadSavedCards = useCallback(async (): Promise<SavedCard[]> => {
+    if (!cardsKey) return [];
+
+    try {
+      const raw = await SecureStore.getItemAsync(cardsKey);
+      return raw ? (JSON.parse(raw) as SavedCard[]) : [];
+    } catch {
+      return [];
+    }
+  }, [cardsKey]);
+
+  const persistSavedCards = useCallback(
+    async (cards: SavedCard[]) => {
+      if (!cardsKey) return;
+
+      try {
+        await SecureStore.setItemAsync(cardsKey, JSON.stringify(cards));
+      } catch (error) {
+        console.error("❌ SAVE CARDS ERROR:", error);
+      }
+    },
+    [cardsKey]
+  );
+
+  const loadWallet = useCallback(async (): Promise<number> => {
+    if (!walletKey) return DEFAULT_WALLET_BALANCE;
+
+    try {
+      const raw = await SecureStore.getItemAsync(walletKey);
+      const parsed = raw === null ? NaN : Number(raw);
+      return Number.isFinite(parsed) ? parsed : DEFAULT_WALLET_BALANCE;
+    } catch {
+      return DEFAULT_WALLET_BALANCE;
+    }
+  }, [walletKey]);
+
+  const persistWallet = useCallback(
+    async (balance: number) => {
+      if (!walletKey) return;
+
+      try {
+        await SecureStore.setItemAsync(walletKey, String(balance));
+      } catch (error) {
+        console.error("❌ SAVE WALLET ERROR:", error);
+      }
+    },
+    [walletKey]
+  );
+
+  const removeSavedCard = (cardId: string) => {
+    Alert.alert("Remove card", "Remove this saved card from your phone?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          const next = savedCards.filter((card) => card.id !== cardId);
+          setSavedCards(next);
+          await persistSavedCards(next);
+          setSelectedCardId(next[0]?.id ?? "new");
+          setCvv("");
+        },
+      },
+    ]);
+  };
 
   /* =======================================================
      STATUS NORMALIZATION
@@ -314,9 +585,70 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
     loadFines(true);
   }, [loadFines]);
 
+  /* =======================================================
+     LOAD PAYMENT HISTORY
+
+     Reads paymentHistory where citizenId == user.idNumber
+     (sorted on the phone so no Firestore index is needed)
+  ======================================================= */
+
+  const loadHistory = useCallback(async () => {
+    if (!user?.idNumber) {
+      setHistory([]);
+      return;
+    }
+
+    try {
+      const historyQuery = query(
+        collection(db, "paymentHistory"),
+        where("citizenId", "==", user.idNumber)
+      );
+
+      const snapshot = await getDocs(historyQuery);
+
+      const records: PaymentRecord[] = snapshot.docs
+        .map((paymentDoc) => {
+          const data = paymentDoc.data() as any;
+
+          const detail =
+            data.cardBrand && data.cardLast4
+              ? `${data.cardBrand} •••• ${data.cardLast4}`
+              : data.bank
+              ? String(data.bank)
+              : String(data.methodLabel ?? "");
+
+          return {
+            id: paymentDoc.id,
+            reference: String(data.reference ?? paymentDoc.id),
+            amount: Number(data.amount ?? 0),
+            methodLabel: String(data.methodLabel ?? "Payment"),
+            detail,
+            status: String(data.status ?? "completed"),
+            ticketId: String(data.ticketId ?? ""),
+            createdAt: toDate(data.createdAt),
+          };
+        })
+        .sort(
+          (a, b) =>
+            (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+        )
+        .slice(0, 5);
+
+      setHistory(records);
+    } catch (error) {
+      // History is a nice-to-have: never block the screen on it.
+      console.warn("Payment history unavailable:", error);
+      setHistory([]);
+    }
+  }, [user?.idNumber]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadFines(false);
+    await Promise.all([loadFines(false), loadHistory()]);
   };
 
   /* =======================================================
@@ -349,22 +681,94 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
   }, [fines, getAmount]);
 
   /* =======================================================
+     OTP + BANK REDIRECT EFFECTS
+  ======================================================= */
+
+  // Simulated SMS arriving a moment after the OTP screen opens.
+  useEffect(() => {
+    if (step !== "otp") {
+      setBannerVisible(false);
+      return;
+    }
+
+    bannerAnim.setValue(-90);
+
+    const timer = setTimeout(() => {
+      setBannerVisible(true);
+      buzz(Haptics.NotificationFeedbackType.Success);
+
+      Animated.timing(bannerAnim, {
+        toValue: 0,
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [step, otpCode, bannerAnim]);
+
+  // "Redirecting to your bank..." then the bank approval screen.
+  useEffect(() => {
+    if (step !== "bank_redirect") return;
+
+    const timer = setTimeout(() => setStep("bank_approve"), 2000);
+
+    return () => clearTimeout(timer);
+  }, [step]);
+
+  /* =======================================================
      SIMULATED PAYMENT
   ======================================================= */
 
-  const handlePay = (fine: DisplayFine) => {
+  const resetPaymentFlow = () => {
     setReceipt(null);
     setSelectedMethod("card");
+    setStep("method");
+    setStageIndex(0);
+    setFailureMessage("");
+    setPaymentCtx(null);
+    setCvv("");
+    setCardNumber("");
+    setCardExpiry("");
+    setCardHolder("");
+    setSaveNewCard(true);
+    setFormError("");
+    setOtpCode("");
+    setOtpInput("");
+    setOtpAttempts(0);
+    setOtpError("");
+    setSelectedBank(BANKS[0]);
+  };
+
+  const handlePay = async (fine: DisplayFine) => {
+    resetPaymentFlow();
+
+    const [cards, balance] = await Promise.all([loadSavedCards(), loadWallet()]);
+
+    setSavedCards(cards);
+    setSelectedCardId(cards[0]?.id ?? "new");
+    setWalletBalance(balance);
     setPayingFine(fine);
   };
 
   const closePaymentModal = () => {
     if (processing) return;
     setPayingFine(null);
-    setReceipt(null);
+    resetPaymentFlow();
   };
 
-  const confirmPayment = async () => {
+  const failPayment = (message: string) => {
+    setFailureMessage(message);
+    setStep("failed");
+    buzz(Haptics.NotificationFeedbackType.Error);
+  };
+
+  /* -------------------------------------------------------
+     THE ACTUAL PAYMENT (same atomic logic as before),
+     wrapped in realistic processing stages
+  ------------------------------------------------------- */
+
+  const runPayment = async (ctx: PaymentContext) => {
     if (!payingFine || processing) return;
 
     if (!user?.idNumber) {
@@ -376,15 +780,43 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
     }
 
     const fine = payingFine;
-    const method = PAYMENT_METHODS.find((item) => item.id === selectedMethod)!;
+    const method = PAYMENT_METHODS.find((item) => item.id === ctx.methodId)!;
     const ticketId = getReference(fine);
 
     setProcessing(true);
+    setStageIndex(0);
+    setStep("processing");
 
     try {
-      // Simulated payment gateway delay
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      // Stage 1: Securing connection
+      await wait(700);
+      setStageIndex(1);
 
+      // Stage 2: Verifying payment details
+      await wait(900);
+      setStageIndex(2);
+
+      // Stage 3: Contacting your bank
+      await wait(1000);
+
+      if (ctx.declined) {
+        throw new Error(
+          "Your bank declined this payment. You have not been charged."
+        );
+      }
+
+      if (
+        ctx.methodId === "wallet" &&
+        walletBalance < getAmount(fine)
+      ) {
+        throw new Error(
+          "Insufficient wallet balance. You have not been charged."
+        );
+      }
+
+      setStageIndex(3);
+
+      // Stage 4: "Server side" processing = the Firestore transaction
       const fineRef = doc(db, "fines", fine.id);
       const historyRef = doc(collection(db, "paymentHistory"));
 
@@ -447,36 +879,1042 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
 
           method: method.id,
           methodLabel: method.title,
+          cardBrand: ctx.cardBrand ?? null,
+          cardLast4: ctx.cardLast4 ?? null,
+          bank: ctx.bank ?? null,
+          stagesCompleted: PROCESSING_STAGES.length,
           status: "completed",
           simulated: true,
 
           createdAt: serverTimestamp(),
+          processedAt: serverTimestamp(),
         });
 
         return amountDue;
       });
+
+      // Stage 5: Confirming with Traffic Services
+      setStageIndex(4);
+      await wait(800);
+      setStageIndex(PROCESSING_STAGES.length);
+      await wait(350);
+
+      // Wallet: take the money out of the on-phone balance.
+      if (ctx.methodId === "wallet") {
+        const newBalance = Math.max(0, walletBalance - amountPaid);
+        setWalletBalance(newBalance);
+        await persistWallet(newBalance);
+      }
+
+      // Card: remember it for next time (never the full number or CVV).
+      if (ctx.cardToSave) {
+        const alreadySaved = savedCards.some(
+          (card) =>
+            card.last4 === ctx.cardToSave!.last4 &&
+            card.expiry === ctx.cardToSave!.expiry
+        );
+
+        if (!alreadySaved) {
+          const next = [...savedCards, ctx.cardToSave];
+          setSavedCards(next);
+          await persistSavedCards(next);
+        }
+      }
 
       setReceipt({
         reference: paymentReference,
         amount: amountPaid,
         ticketId,
         method: method.title,
+        detail: ctx.detail,
         paidAt: new Date(),
       });
+
+      setStep("receipt");
+      buzz(Haptics.NotificationFeedbackType.Success);
 
       // Refresh the list so the fine moves to "Paid"
       // and the outstanding total drops.
       loadFines(false);
+      loadHistory();
     } catch (error: any) {
       console.error("❌ PAYMENT ERROR:", error);
 
-      Alert.alert(
-        "Payment Unsuccessful",
+      failPayment(
         error?.message ||
           "We could not complete your payment. You have not been charged. Please try again."
       );
     } finally {
       setProcessing(false);
+    }
+  };
+
+  /* -------------------------------------------------------
+     STEP HANDLERS
+  ------------------------------------------------------- */
+
+  const startOtp = () => {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+
+    setOtpCode(code);
+    setOtpInput("");
+    setOtpAttempts(0);
+    setOtpError("");
+    setStep("otp");
+  };
+
+  const handleContinueFromMethod = () => {
+    if (!payingFine) return;
+
+    setFormError("");
+
+    if (selectedMethod === "card") {
+      if (selectedCardId === "new") {
+        setCvv("");
+        setStep("card_form");
+        return;
+      }
+
+      const card = savedCards.find((item) => item.id === selectedCardId);
+
+      if (!card) {
+        setStep("card_form");
+        return;
+      }
+
+      if (!isExpiryValid(card.expiry)) {
+        setFormError("This card has expired. Remove it or use another card.");
+        return;
+      }
+
+      if (onlyDigits(cvv).length < 3) {
+        setFormError("Enter the CVV for this card.");
+        return;
+      }
+
+      setPaymentCtx({
+        methodId: "card",
+        detail: `${card.brand} •••• ${card.last4}`,
+        cardBrand: card.brand,
+        cardLast4: card.last4,
+        declined: !!card.alwaysDecline,
+        cardToSave: null,
+      });
+
+      startOtp();
+      return;
+    }
+
+    if (selectedMethod === "eft") {
+      setStep("bank_select");
+      return;
+    }
+
+    // Wallet
+    const amount = getAmount(payingFine);
+
+    if (walletBalance < amount) {
+      failPayment(
+        `Insufficient wallet balance. You have ${formatCurrency(
+          walletBalance
+        )} but this fine is ${formatCurrency(amount)}.`
+      );
+      return;
+    }
+
+    runPayment({
+      methodId: "wallet",
+      detail: "Digital wallet",
+    });
+  };
+
+  const submitCardForm = () => {
+    const digits = onlyDigits(cardNumber);
+
+    if (cardHolder.trim().length < 2) {
+      setFormError("Enter the name on the card.");
+      return;
+    }
+
+    if (digits.length < 13 || !passesLuhn(digits)) {
+      setFormError("That card number doesn't look right. Please check it.");
+      return;
+    }
+
+    if (!isExpiryValid(cardExpiry)) {
+      setFormError("Enter a valid expiry date (MM/YY). This card may be expired.");
+      return;
+    }
+
+    const brand = detectBrand(digits);
+    const cvvLength = brand === "Amex" ? 4 : 3;
+
+    if (onlyDigits(cvv).length !== cvvLength) {
+      setFormError(`Enter the ${cvvLength}-digit CVV.`);
+      return;
+    }
+
+    setFormError("");
+
+    const declined = digits === DECLINE_TEST_NUMBER;
+
+    const card: SavedCard = {
+      id: `card_${Date.now()}`,
+      brand,
+      last4: digits.slice(-4),
+      expiry: cardExpiry,
+      holder: cardHolder.trim().toUpperCase(),
+      alwaysDecline: declined,
+    };
+
+    setPaymentCtx({
+      methodId: "card",
+      detail: `${brand} •••• ${card.last4}`,
+      cardBrand: brand,
+      cardLast4: card.last4,
+      declined,
+      cardToSave: saveNewCard ? card : null,
+    });
+
+    startOtp();
+  };
+
+  const verifyOtp = () => {
+    if (!paymentCtx) return;
+
+    if (otpInput.trim() === otpCode) {
+      setOtpError("");
+      runPayment(paymentCtx);
+      return;
+    }
+
+    const attempts = otpAttempts + 1;
+    setOtpAttempts(attempts);
+    setOtpInput("");
+    buzz(Haptics.NotificationFeedbackType.Warning);
+
+    if (attempts >= MAX_OTP_ATTEMPTS) {
+      failPayment(
+        "Payment declined: too many incorrect OTP attempts. You have not been charged."
+      );
+      return;
+    }
+
+    const left = MAX_OTP_ATTEMPTS - attempts;
+    setOtpError(
+      `Incorrect code. ${left} ${left === 1 ? "attempt" : "attempts"} left.`
+    );
+  };
+
+  const resendOtp = () => {
+    startOtp();
+  };
+
+  const approveAtBank = () => {
+    runPayment({
+      methodId: "eft",
+      detail: `${selectedBank} Instant EFT`,
+      bank: selectedBank,
+    });
+  };
+
+  const declineAtBank = () => {
+    failPayment(
+      `You declined this payment in ${selectedBank}. You have not been charged.`
+    );
+  };
+
+  const shareReceipt = async () => {
+    if (!receipt) return;
+
+    try {
+      const html = `
+        <html>
+          <body style="font-family: Arial, sans-serif; padding: 28px; color: #222;">
+            <h2 style="color:#003366; margin-bottom:2px;">Payment Receipt</h2>
+            <p style="color:#777; margin-top:0;">TrafficConnect Payments (Simulated)</p>
+            <hr/>
+            <table style="width:100%; font-size:14px; line-height:2;">
+              <tr><td>Amount paid</td><td style="text-align:right;"><b>${formatCurrency(
+                receipt.amount
+              )}</b></td></tr>
+              <tr><td>Fine</td><td style="text-align:right;">${receipt.ticketId}</td></tr>
+              <tr><td>Method</td><td style="text-align:right;">${receipt.method}</td></tr>
+              <tr><td>Paid with</td><td style="text-align:right;">${receipt.detail}</td></tr>
+              <tr><td>Reference</td><td style="text-align:right;">${receipt.reference}</td></tr>
+              <tr><td>Date</td><td style="text-align:right;">${receipt.paidAt.toLocaleString(
+                "en-ZA"
+              )}</td></tr>
+              <tr><td>Citizen</td><td style="text-align:right;">${
+                user?.fullName ?? "Citizen"
+              }</td></tr>
+            </table>
+            <hr/>
+            <p style="color:#999; font-size:12px;">
+              This was a simulated payment. No real money was moved.
+            </p>
+          </body>
+        </html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html });
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "application/pdf",
+          dialogTitle: "Share payment receipt",
+        });
+      } else {
+        Alert.alert("Receipt saved", "Sharing isn't available on this device.");
+      }
+    } catch (error) {
+      console.error("❌ SHARE RECEIPT ERROR:", error);
+      Alert.alert("Couldn't share receipt", "Please try again.");
+    }
+  };
+
+  /* =======================================================
+     PAYMENT SHEET RENDER HELPERS
+  ======================================================= */
+
+  const BackLink = ({ to }: { to: PaymentStep }) => (
+    <TouchableOpacity
+      style={styles.backLink}
+      activeOpacity={0.7}
+      disabled={processing}
+      onPress={() => {
+        setFormError("");
+        setStep(to);
+      }}
+    >
+      <MaterialIcons name="arrow-back" size={18} color="#003366" />
+      <Text style={styles.backLinkText}>Back</Text>
+    </TouchableOpacity>
+  );
+
+  const renderMethodStep = () => {
+    if (!payingFine) return null;
+
+    return (
+      <>
+        <Text style={styles.modalTitle}>Confirm Payment</Text>
+
+        <Text style={styles.modalSubtitle}>
+          {payingFine.offence ?? payingFine.description ?? "Traffic violation"}
+          {"\n"}
+          {getReference(payingFine)}
+        </Text>
+
+        <View style={styles.modalAmountBox}>
+          <Text style={styles.modalAmountLabel}>Amount to pay</Text>
+          <Text style={styles.modalAmount}>
+            {formatCurrency(getAmount(payingFine))}
+          </Text>
+        </View>
+
+        <Text style={styles.methodHeading}>PAYMENT METHOD</Text>
+
+        {PAYMENT_METHODS.map((method) => {
+          const selected = selectedMethod === method.id;
+
+          return (
+            <View key={method.id}>
+              <TouchableOpacity
+                style={[styles.methodCard, selected && styles.methodCardActive]}
+                activeOpacity={0.8}
+                disabled={processing}
+                onPress={() => {
+                  setSelectedMethod(method.id);
+                  setFormError("");
+                }}
+              >
+                <View style={styles.methodIcon}>
+                  <MaterialIcons name={method.icon} size={21} color="#003366" />
+                </View>
+
+                <View style={styles.methodText}>
+                  <Text style={styles.methodTitle}>{method.title}</Text>
+                  <Text style={styles.methodDescription}>
+                    {method.id === "wallet"
+                      ? `Balance: ${formatCurrency(walletBalance)}`
+                      : method.description}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.methodRadio,
+                    selected && styles.methodRadioActive,
+                  ]}
+                >
+                  {selected && <View style={styles.methodRadioInner} />}
+                </View>
+              </TouchableOpacity>
+
+              {/* SAVED CARDS */}
+              {method.id === "card" && selected && (
+                <View style={styles.savedCardsBox}>
+                  {savedCards.map((card) => {
+                    const cardSelected = selectedCardId === card.id;
+                    const expired = !isExpiryValid(card.expiry);
+
+                    return (
+                      <View key={card.id}>
+                        <TouchableOpacity
+                          style={[
+                            styles.savedCard,
+                            cardSelected && styles.savedCardActive,
+                          ]}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            setSelectedCardId(card.id);
+                            setCvv("");
+                            setFormError("");
+                          }}
+                          onLongPress={() => removeSavedCard(card.id)}
+                        >
+                          <View style={styles.brandBadge}>
+                            <Text style={styles.brandBadgeText}>
+                              {card.brand === "Mastercard"
+                                ? "MC"
+                                : card.brand === "Card"
+                                ? "••"
+                                : card.brand.toUpperCase().slice(0, 4)}
+                            </Text>
+                          </View>
+
+                          <View style={styles.methodText}>
+                            <Text style={styles.methodTitle}>
+                              {card.brand} •••• {card.last4}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.methodDescription,
+                                expired && styles.expiredText,
+                              ]}
+                            >
+                              {expired ? "Expired " : "Expires "}
+                              {card.expiry} · {card.holder}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={() => removeSavedCard(card.id)}
+                          >
+                            <MaterialIcons
+                              name="delete-outline"
+                              size={19}
+                              color="#999"
+                            />
+                          </TouchableOpacity>
+
+                          <View
+                            style={[
+                              styles.methodRadio,
+                              styles.savedRadio,
+                              cardSelected && styles.methodRadioActive,
+                            ]}
+                          >
+                            {cardSelected && (
+                              <View style={styles.methodRadioInner} />
+                            )}
+                          </View>
+                        </TouchableOpacity>
+
+                        {cardSelected && (
+                          <View style={styles.cvvRow}>
+                            <Text style={styles.cvvLabel}>
+                              Enter CVV to confirm
+                            </Text>
+
+                            <TextInput
+                              style={styles.cvvInput}
+                              value={cvv}
+                              onChangeText={(text) =>
+                                setCvv(onlyDigits(text).slice(0, 4))
+                              }
+                              placeholder="CVV"
+                              placeholderTextColor="#AAA"
+                              keyboardType="number-pad"
+                              secureTextEntry
+                              maxLength={4}
+                            />
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+
+                  <TouchableOpacity
+                    style={[
+                      styles.savedCard,
+                      selectedCardId === "new" && styles.savedCardActive,
+                    ]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSelectedCardId("new");
+                      setFormError("");
+                    }}
+                  >
+                    <View style={styles.brandBadge}>
+                      <MaterialIcons name="add" size={18} color="#003366" />
+                    </View>
+
+                    <View style={styles.methodText}>
+                      <Text style={styles.methodTitle}>Use a new card</Text>
+                      <Text style={styles.methodDescription}>
+                        Enter card details
+                      </Text>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.methodRadio,
+                        selectedCardId === "new" && styles.methodRadioActive,
+                      ]}
+                    >
+                      {selectedCardId === "new" && (
+                        <View style={styles.methodRadioInner} />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          );
+        })}
+
+        {!!formError && <Text style={styles.errorText}>{formError}</Text>}
+
+        <Text style={styles.simulationNote}>
+          Simulation only: no real money will be taken.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.payButton}
+          activeOpacity={0.8}
+          disabled={processing}
+          onPress={handleContinueFromMethod}
+        >
+          <MaterialIcons
+            name={selectedMethod === "wallet" ? "lock" : "arrow-forward"}
+            size={18}
+            color="#FFFFFF"
+          />
+          <Text style={styles.payButtonText}>
+            {selectedMethod === "wallet"
+              ? `Pay ${formatCurrency(getAmount(payingFine))}`
+              : "Continue"}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.cancelButton}
+          activeOpacity={0.8}
+          disabled={processing}
+          onPress={closePaymentModal}
+        >
+          <Text style={styles.cancelButtonText}>Cancel</Text>
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  const renderCardForm = () => {
+    if (!payingFine) return null;
+
+    const brand = detectBrand(cardNumber);
+
+    return (
+      <>
+        <BackLink to="method" />
+
+        <Text style={styles.modalTitle}>Card Details</Text>
+
+        <Text style={styles.modalSubtitle}>
+          Pay {formatCurrency(getAmount(payingFine))} with your debit or credit
+          card.
+        </Text>
+
+        <Text style={styles.inputLabel}>NAME ON CARD</Text>
+        <TextInput
+          style={styles.input}
+          value={cardHolder}
+          onChangeText={setCardHolder}
+          placeholder="e.g. T. MOKOENA"
+          placeholderTextColor="#AAA"
+          autoCapitalize="characters"
+        />
+
+        <View style={styles.inputLabelRow}>
+          <Text style={styles.inputLabel}>CARD NUMBER</Text>
+          {brand !== "Card" && <Text style={styles.brandHint}>{brand}</Text>}
+        </View>
+        <TextInput
+          style={styles.input}
+          value={cardNumber}
+          onChangeText={(text) => setCardNumber(formatCardNumber(text))}
+          placeholder="0000 0000 0000 0000"
+          placeholderTextColor="#AAA"
+          keyboardType="number-pad"
+          maxLength={23}
+        />
+
+        <View style={styles.inputRow}>
+          <View style={styles.inputHalf}>
+            <Text style={styles.inputLabel}>EXPIRY</Text>
+            <TextInput
+              style={styles.input}
+              value={cardExpiry}
+              onChangeText={(text) => setCardExpiry(formatExpiry(text))}
+              placeholder="MM/YY"
+              placeholderTextColor="#AAA"
+              keyboardType="number-pad"
+              maxLength={5}
+            />
+          </View>
+
+          <View style={styles.inputHalf}>
+            <Text style={styles.inputLabel}>CVV</Text>
+            <TextInput
+              style={styles.input}
+              value={cvv}
+              onChangeText={(text) => setCvv(onlyDigits(text).slice(0, 4))}
+              placeholder="123"
+              placeholderTextColor="#AAA"
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={4}
+            />
+          </View>
+        </View>
+
+        <View style={styles.saveRow}>
+          <View style={styles.saveText}>
+            <Text style={styles.methodTitle}>Save card on this phone</Text>
+            <Text style={styles.methodDescription}>
+              Only the last 4 digits and expiry are stored. Never the CVV.
+            </Text>
+          </View>
+
+          <Switch
+            value={saveNewCard}
+            onValueChange={setSaveNewCard}
+            trackColor={{ false: "#D0D6DC", true: "#7FA6CC" }}
+            thumbColor={saveNewCard ? "#003366" : "#F4F4F4"}
+          />
+        </View>
+
+        {!!formError && <Text style={styles.errorText}>{formError}</Text>}
+
+        <Text style={styles.simulationNote}>
+          Simulation only: no real money will be taken.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.payButton}
+          activeOpacity={0.8}
+          onPress={submitCardForm}
+        >
+          <MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" />
+          <Text style={styles.payButtonText}>Continue</Text>
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  const renderOtp = () => (
+    <>
+      {/* Simulated SMS banner */}
+      <Animated.View
+        style={[
+          styles.smsBanner,
+          {
+            opacity: bannerVisible ? 1 : 0,
+            transform: [{ translateY: bannerAnim }],
+          },
+        ]}
+      >
+        <View style={styles.smsIcon}>
+          <MaterialIcons name="sms" size={18} color="#FFFFFF" />
+        </View>
+
+        <View style={styles.smsTextBox}>
+          <Text style={styles.smsTitle}>YOUR BANK · now</Text>
+          <Text style={styles.smsBody}>
+            Your one-time PIN is {otpCode}. Never share it with anyone.
+          </Text>
+        </View>
+      </Animated.View>
+
+      <BackLink to={selectedCardId === "new" ? "card_form" : "method"} />
+
+      <View style={styles.otpIconWrap}>
+        <MaterialIcons name="verified-user" size={40} color="#003366" />
+      </View>
+
+      <Text style={styles.modalTitle}>Verify with your bank</Text>
+
+      <Text style={styles.modalSubtitle}>
+        3D Secure check. Enter the 6-digit one-time PIN sent to your phone to
+        approve this payment.
+      </Text>
+
+      <TextInput
+        style={styles.otpInput}
+        value={otpInput}
+        onChangeText={(text) => {
+          setOtpInput(onlyDigits(text).slice(0, 6));
+          setOtpError("");
+        }}
+        placeholder="••••••"
+        placeholderTextColor="#BBB"
+        keyboardType="number-pad"
+        maxLength={6}
+      />
+
+      {!!otpError && (
+        <Text style={[styles.errorText, styles.centerText]}>{otpError}</Text>
+      )}
+
+      <TouchableOpacity
+        style={[
+          styles.payButton,
+          otpInput.length < 6 && styles.payButtonDisabled,
+        ]}
+        activeOpacity={0.8}
+        disabled={otpInput.length < 6}
+        onPress={verifyOtp}
+      >
+        <MaterialIcons name="lock" size={18} color="#FFFFFF" />
+        <Text style={styles.payButtonText}>Verify and Pay</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.cancelButton}
+        activeOpacity={0.8}
+        onPress={resendOtp}
+      >
+        <Text style={styles.cancelButtonText}>Resend PIN</Text>
+      </TouchableOpacity>
+    </>
+  );
+
+  const renderBankSelect = () => (
+    <>
+      <BackLink to="method" />
+
+      <Text style={styles.modalTitle}>Choose your bank</Text>
+
+      <Text style={styles.modalSubtitle}>
+        You'll be taken to your bank to approve this payment.
+      </Text>
+
+      {BANKS.map((bank) => {
+        const selected = selectedBank === bank;
+
+        return (
+          <TouchableOpacity
+            key={bank}
+            style={[styles.methodCard, selected && styles.methodCardActive]}
+            activeOpacity={0.8}
+            onPress={() => setSelectedBank(bank)}
+          >
+            <View style={styles.methodIcon}>
+              <MaterialIcons name="account-balance" size={21} color="#003366" />
+            </View>
+
+            <View style={styles.methodText}>
+              <Text style={styles.methodTitle}>{bank}</Text>
+            </View>
+
+            <View
+              style={[styles.methodRadio, selected && styles.methodRadioActive]}
+            >
+              {selected && <View style={styles.methodRadioInner} />}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+
+      <Text style={styles.simulationNote}>
+        Simulation only: no real bank will be contacted.
+      </Text>
+
+      <TouchableOpacity
+        style={styles.payButton}
+        activeOpacity={0.8}
+        onPress={() => setStep("bank_redirect")}
+      >
+        <MaterialIcons name="open-in-new" size={18} color="#FFFFFF" />
+        <Text style={styles.payButtonText}>Continue to {selectedBank}</Text>
+      </TouchableOpacity>
+    </>
+  );
+
+  const renderBankRedirect = () => (
+    <View style={styles.centerBlock}>
+      <View style={styles.otpIconWrap}>
+        <MaterialIcons name="account-balance" size={40} color="#003366" />
+      </View>
+
+      <Text style={styles.modalTitle}>Redirecting to {selectedBank}</Text>
+
+      <Text style={styles.modalSubtitle}>
+        Please wait while we connect you securely to your bank...
+      </Text>
+
+      <ActivityIndicator size="small" color="#003366" />
+    </View>
+  );
+
+  const renderBankApprove = () => {
+    if (!payingFine) return null;
+
+    return (
+      <>
+        <View style={styles.bankHeader}>
+          <MaterialIcons name="account-balance" size={20} color="#FFFFFF" />
+          <Text style={styles.bankHeaderText}>{selectedBank}</Text>
+          <MaterialIcons name="lock" size={16} color="#FFFFFF" />
+        </View>
+
+        <Text style={[styles.modalTitle, styles.bankTitle]}>
+          Approve payment
+        </Text>
+
+        <Text style={styles.modalSubtitle}>
+          A payment request needs your approval.
+        </Text>
+
+        <View style={styles.receiptBox}>
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Merchant</Text>
+            <Text style={styles.receiptValue}>TrafficConnect Payments</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Description</Text>
+            <Text style={styles.receiptValue} numberOfLines={2}>
+              {payingFine.offence ?? payingFine.description ?? "Traffic fine"}
+            </Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Fine</Text>
+            <Text style={styles.receiptValue}>{getReference(payingFine)}</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Amount</Text>
+            <Text style={styles.receiptValueBig}>
+              {formatCurrency(getAmount(payingFine))}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.simulationNote}>
+          Simulation only: no real money will be taken.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.payButton}
+          activeOpacity={0.8}
+          onPress={approveAtBank}
+        >
+          <MaterialIcons name="check" size={18} color="#FFFFFF" />
+          <Text style={styles.payButtonText}>Approve</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.cancelButton}
+          activeOpacity={0.8}
+          onPress={declineAtBank}
+        >
+          <Text style={styles.cancelButtonText}>Decline</Text>
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  const renderProcessing = () => (
+    <>
+      <Text style={styles.modalTitle}>Processing payment</Text>
+
+      <Text style={styles.modalSubtitle}>
+        Please don't close the app while we process your payment.
+      </Text>
+
+      <View style={styles.stagesBox}>
+        {PROCESSING_STAGES.map((label, index) => {
+          const done = stageIndex > index;
+          const active = stageIndex === index;
+
+          return (
+            <View key={label} style={styles.stageRow}>
+              <View style={styles.stageIconWrap}>
+                {done ? (
+                  <MaterialIcons name="check-circle" size={20} color="#2E7D32" />
+                ) : active ? (
+                  <ActivityIndicator size="small" color="#003366" />
+                ) : (
+                  <View style={styles.stagePending} />
+                )}
+              </View>
+
+              <Text
+                style={[
+                  styles.stageText,
+                  done && styles.stageTextDone,
+                  active && styles.stageTextActive,
+                ]}
+              >
+                {label}
+                {active || done ? "" : ""}
+                {active ? "..." : ""}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
+      <Text style={styles.simulationNote}>
+        Your payment is being processed securely on our servers.
+      </Text>
+    </>
+  );
+
+  const renderReceipt = () => {
+    if (!receipt) return null;
+
+    return (
+      <>
+        <View style={styles.successIcon}>
+          <MaterialIcons name="check-circle" size={54} color="#2E7D32" />
+        </View>
+
+        <Text style={styles.modalTitle}>Payment Successful</Text>
+
+        <Text style={styles.modalSubtitle}>
+          Your fine has been settled and the amount has been deducted from your
+          outstanding balance.
+        </Text>
+
+        <View style={styles.receiptBox}>
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Amount paid</Text>
+            <Text style={styles.receiptValueBig}>
+              {formatCurrency(receipt.amount)}
+            </Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Fine</Text>
+            <Text style={styles.receiptValue}>{receipt.ticketId}</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Method</Text>
+            <Text style={styles.receiptValue}>{receipt.method}</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Paid with</Text>
+            <Text style={styles.receiptValue}>{receipt.detail}</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Reference</Text>
+            <Text style={styles.receiptValue}>{receipt.reference}</Text>
+          </View>
+
+          <View style={styles.receiptRow}>
+            <Text style={styles.receiptLabel}>Date</Text>
+            <Text style={styles.receiptValue}>
+              {receipt.paidAt.toLocaleString("en-ZA")}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.simulationNote}>
+          This was a simulated payment. No real money was moved.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          activeOpacity={0.8}
+          onPress={shareReceipt}
+        >
+          <MaterialIcons name="share" size={18} color="#003366" />
+          <Text style={styles.secondaryButtonText}>Share receipt</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.payButton}
+          activeOpacity={0.8}
+          onPress={closePaymentModal}
+        >
+          <Text style={styles.payButtonText}>Done</Text>
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  const renderFailed = () => (
+    <>
+      <View style={styles.successIcon}>
+        <MaterialIcons name="error" size={54} color="#C62828" />
+      </View>
+
+      <Text style={styles.modalTitle}>Payment Unsuccessful</Text>
+
+      <Text style={styles.modalSubtitle}>{failureMessage}</Text>
+
+      <TouchableOpacity
+        style={styles.payButton}
+        activeOpacity={0.8}
+        onPress={() => {
+          setFailureMessage("");
+          setFormError("");
+          setStep("method");
+        }}
+      >
+        <MaterialIcons name="refresh" size={18} color="#FFFFFF" />
+        <Text style={styles.payButtonText}>Try again</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.cancelButton}
+        activeOpacity={0.8}
+        onPress={closePaymentModal}
+      >
+        <Text style={styles.cancelButtonText}>Close</Text>
+      </TouchableOpacity>
+    </>
+  );
+
+  const renderPaymentStep = () => {
+    switch (step) {
+      case "card_form":
+        return renderCardForm();
+      case "otp":
+        return renderOtp();
+      case "bank_select":
+        return renderBankSelect();
+      case "bank_redirect":
+        return renderBankRedirect();
+      case "bank_approve":
+        return renderBankApprove();
+      case "processing":
+        return renderProcessing();
+      case "receipt":
+        return renderReceipt();
+      case "failed":
+        return renderFailed();
+      case "method":
+      default:
+        return renderMethodStep();
     }
   };
 
@@ -705,6 +2143,55 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
           </>
         )}
 
+        {/* PAYMENT HISTORY */}
+
+        {history.length > 0 && (
+          <>
+            <View style={[styles.sectionHeader, styles.historyHeader]}>
+              <View>
+                <Text style={styles.sectionEyebrow}>ACTIVITY</Text>
+
+                <Text style={styles.sectionTitle}>Payment History</Text>
+              </View>
+
+              <Text style={styles.sectionCount}>Last {history.length}</Text>
+            </View>
+
+            <View style={styles.historyCard}>
+              {history.map((record, index) => (
+                <View
+                  key={record.id}
+                  style={[
+                    styles.historyRow,
+                    index < history.length - 1 && styles.historyRowBorder,
+                  ]}
+                >
+                  <View style={styles.historyIcon}>
+                    <MaterialIcons name="check" size={18} color="#2E7D32" />
+                  </View>
+
+                  <View style={styles.historyInfo}>
+                    <Text style={styles.historyTitle} numberOfLines={1}>
+                      {record.detail || record.methodLabel}
+                    </Text>
+
+                    <Text style={styles.historyMeta} numberOfLines={1}>
+                      {record.reference}
+                      {record.createdAt
+                        ? ` · ${formatDate(record.createdAt)}`
+                        : ""}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.historyAmount}>
+                    {formatCurrency(record.amount)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
         {/* DATA FOOTER */}
 
         <View style={styles.dataFooter}>
@@ -737,172 +2224,20 @@ export default function OutstandingPenaltiesScreen({ navigation }: any) {
         animationType="slide"
         onRequestClose={closePaymentModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
           <View style={styles.modalSheet}>
-            {receipt ? (
-              <>
-                <View style={styles.successIcon}>
-                  <MaterialIcons
-                    name="check-circle"
-                    size={54}
-                    color="#2E7D32"
-                  />
-                </View>
-
-                <Text style={styles.modalTitle}>Payment Successful</Text>
-
-                <Text style={styles.modalSubtitle}>
-                  Your fine has been settled and the amount has been deducted
-                  from your outstanding balance.
-                </Text>
-
-                <View style={styles.receiptBox}>
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Amount paid</Text>
-                    <Text style={styles.receiptValueBig}>
-                      {formatCurrency(receipt.amount)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Fine</Text>
-                    <Text style={styles.receiptValue}>{receipt.ticketId}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Method</Text>
-                    <Text style={styles.receiptValue}>{receipt.method}</Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Reference</Text>
-                    <Text style={styles.receiptValue}>
-                      {receipt.reference}
-                    </Text>
-                  </View>
-
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Date</Text>
-                    <Text style={styles.receiptValue}>
-                      {receipt.paidAt.toLocaleString("en-ZA")}
-                    </Text>
-                  </View>
-                </View>
-
-                <Text style={styles.simulationNote}>
-                  This was a simulated payment. No real money was moved.
-                </Text>
-
-                <TouchableOpacity
-                  style={styles.payButton}
-                  activeOpacity={0.8}
-                  onPress={closePaymentModal}
-                >
-                  <Text style={styles.payButtonText}>Done</Text>
-                </TouchableOpacity>
-              </>
-            ) : payingFine ? (
-              <>
-                <Text style={styles.modalTitle}>Confirm Payment</Text>
-
-                <Text style={styles.modalSubtitle}>
-                  {payingFine.offence ??
-                    payingFine.description ??
-                    "Traffic violation"}
-                  {"\n"}
-                  {getReference(payingFine)}
-                </Text>
-
-                <View style={styles.modalAmountBox}>
-                  <Text style={styles.modalAmountLabel}>Amount to pay</Text>
-                  <Text style={styles.modalAmount}>
-                    {formatCurrency(getAmount(payingFine))}
-                  </Text>
-                </View>
-
-                <Text style={styles.methodHeading}>PAYMENT METHOD</Text>
-
-                {PAYMENT_METHODS.map((method) => {
-                  const selected = selectedMethod === method.id;
-
-                  return (
-                    <TouchableOpacity
-                      key={method.id}
-                      style={[
-                        styles.methodCard,
-                        selected && styles.methodCardActive,
-                      ]}
-                      activeOpacity={0.8}
-                      disabled={processing}
-                      onPress={() => setSelectedMethod(method.id)}
-                    >
-                      <View style={styles.methodIcon}>
-                        <MaterialIcons
-                          name={method.icon}
-                          size={21}
-                          color="#003366"
-                        />
-                      </View>
-
-                      <View style={styles.methodText}>
-                        <Text style={styles.methodTitle}>{method.title}</Text>
-                        <Text style={styles.methodDescription}>
-                          {method.description}
-                        </Text>
-                      </View>
-
-                      <View
-                        style={[
-                          styles.methodRadio,
-                          selected && styles.methodRadioActive,
-                        ]}
-                      >
-                        {selected && <View style={styles.methodRadioInner} />}
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-
-                <Text style={styles.simulationNote}>
-                  Simulation only: no real money will be taken.
-                </Text>
-
-                <TouchableOpacity
-                  style={[
-                    styles.payButton,
-                    processing && styles.payButtonDisabled,
-                  ]}
-                  activeOpacity={0.8}
-                  disabled={processing}
-                  onPress={confirmPayment}
-                >
-                  {processing ? (
-                    <>
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                      <Text style={styles.payButtonText}>Processing...</Text>
-                    </>
-                  ) : (
-                    <>
-                      <MaterialIcons name="lock" size={18} color="#FFFFFF" />
-                      <Text style={styles.payButtonText}>
-                        Pay {formatCurrency(getAmount(payingFine))}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  activeOpacity={0.8}
-                  disabled={processing}
-                  onPress={closePaymentModal}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.modalScrollContent}
+            >
+              {payingFine ? renderPaymentStep() : null}
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1605,6 +2940,11 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
     padding: 20,
     paddingBottom: 30,
+    maxHeight: "92%",
+  },
+
+  modalScrollContent: {
+    paddingBottom: 6,
   },
 
   modalTitle: {
@@ -1822,5 +3162,390 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#777",
     marginLeft: 5,
+  },
+
+  /* =====================================================
+     NEW: PAYMENT FLOW UPGRADE
+  ===================================================== */
+
+  /* Saved cards */
+
+  savedCardsBox: {
+    marginLeft: 10,
+    marginBottom: 6,
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: "#E3E7EB",
+  },
+
+  savedCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#E3E7EB",
+    borderRadius: 11,
+    marginBottom: 8,
+  },
+
+  savedCardActive: {
+    borderColor: "#003366",
+    backgroundColor: "#F3F7FB",
+  },
+
+  savedRadio: {
+    marginLeft: 10,
+  },
+
+  brandBadge: {
+    width: 40,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: "#EAF1F7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 11,
+  },
+
+  brandBadgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#003366",
+    letterSpacing: 0.4,
+  },
+
+  expiredText: {
+    color: "#C62828",
+  },
+
+  cvvRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: -2,
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+
+  cvvLabel: {
+    fontSize: 12,
+    color: "#666",
+  },
+
+  cvvInput: {
+    width: 80,
+    borderWidth: 1,
+    borderColor: "#D0D6DC",
+    borderRadius: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#222",
+    textAlign: "center",
+    backgroundColor: "#FFFFFF",
+  },
+
+  /* Card form */
+
+  backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    marginBottom: 8,
+  },
+
+  backLinkText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#003366",
+    marginLeft: 4,
+  },
+
+  inputLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    color: "#888",
+    marginBottom: 6,
+  },
+
+  inputLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  brandHint: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#003366",
+    marginBottom: 6,
+  },
+
+  input: {
+    borderWidth: 1,
+    borderColor: "#D0D6DC",
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 13,
+    fontSize: 15,
+    color: "#222",
+    backgroundColor: "#FFFFFF",
+    marginBottom: 14,
+  },
+
+  inputRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+
+  inputHalf: {
+    flex: 1,
+  },
+
+  saveRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F7F8FA",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 6,
+  },
+
+  saveText: {
+    flex: 1,
+    paddingRight: 10,
+  },
+
+  errorText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#C62828",
+    marginTop: 4,
+    marginBottom: 6,
+  },
+
+  centerText: {
+    textAlign: "center",
+  },
+
+  /* OTP */
+
+  smsBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1F2933",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+  },
+
+  smsIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: "#2E7D32",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+
+  smsTextBox: {
+    flex: 1,
+  },
+
+  smsTitle: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    color: "#9AA5B1",
+    marginBottom: 2,
+  },
+
+  smsBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#FFFFFF",
+  },
+
+  otpIconWrap: {
+    alignSelf: "center",
+    width: 66,
+    height: 66,
+    borderRadius: 20,
+    backgroundColor: "#EAF1F7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+
+  otpInput: {
+    borderWidth: 1,
+    borderColor: "#D0D6DC",
+    borderRadius: 12,
+    paddingVertical: 14,
+    fontSize: 26,
+    fontWeight: "800",
+    letterSpacing: 10,
+    color: "#003366",
+    textAlign: "center",
+    backgroundColor: "#FFFFFF",
+    marginBottom: 12,
+  },
+
+  /* Bank */
+
+  centerBlock: {
+    alignItems: "center",
+    paddingVertical: 24,
+  },
+
+  bankHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#00704A",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+  },
+
+  bankHeaderText: {
+    flex: 1,
+    marginLeft: 10,
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+
+  bankTitle: {
+    color: "#222",
+  },
+
+  /* Processing stages */
+
+  stagesBox: {
+    backgroundColor: "#F7F8FA",
+    borderRadius: 13,
+    padding: 14,
+    marginBottom: 6,
+  },
+
+  stageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+
+  stageIconWrap: {
+    width: 24,
+    alignItems: "center",
+    marginRight: 10,
+  },
+
+  stagePending: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#D0D6DC",
+  },
+
+  stageText: {
+    fontSize: 13,
+    color: "#999",
+  },
+
+  stageTextActive: {
+    color: "#003366",
+    fontWeight: "700",
+  },
+
+  stageTextDone: {
+    color: "#2E7D32",
+    fontWeight: "600",
+  },
+
+  /* Receipt secondary button */
+
+  secondaryButton: {
+    borderWidth: 1,
+    borderColor: "#003366",
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+
+  secondaryButtonText: {
+    color: "#003366",
+    fontSize: 14,
+    fontWeight: "800",
+    marginLeft: 8,
+  },
+
+  /* Payment history */
+
+  historyHeader: {
+    marginTop: 14,
+  },
+
+  historyCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+  },
+
+  historyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 13,
+  },
+
+  historyRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F0",
+  },
+
+  historyIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#EDF7EF",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 11,
+  },
+
+  historyInfo: {
+    flex: 1,
+    paddingRight: 8,
+  },
+
+  historyTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#222",
+  },
+
+  historyMeta: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 3,
+  },
+
+  historyAmount: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#2E7D32",
   },
 });
